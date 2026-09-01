@@ -9,3 +9,10 @@ loose notes with no date at all. Close the window and it keeps running in the
 background, sliding a soft notification card into the corner of the screen a
 little before something is due, so the whole thing stays out of your way until
 it actually has something to say.
+
+![Overview](docs/home.png)
+
+Adding a routine — pick how often, pick the rule, and it shows you the next five
+dates before you commit.
+
+![Adding an item](docs/new-item.png)
