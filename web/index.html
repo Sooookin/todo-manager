@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>To-Do Manager</title>
+<link rel="icon" href="icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="titlebar pywebview-drag-region">
+  <img class="tb-icon" src="icon.png" alt="">
+  <span class="tb-name">To-Do Manager</span>
+  <span class="tb-sub" id="tb-sub"></span>
+  <div class="tb-gap"></div>
+  <button class="wbtn" id="w-min" title="최소화">&#xE921;</button>
+  <button class="wbtn" id="w-max" title="최대화">&#xE922;</button>
+  <button class="wbtn close" id="w-close" title="닫기 (알림은 계속 동작)">&#xE8BB;</button>
+</div>
+
+<div class="app">
+
+  <header class="top">
+    <div class="date">
+      <div class="d-day" id="dow">—</div>
+      <div class="d-full" id="fulldate">—</div>
+    </div>
+    <div class="clock" id="clock">--:--</div>
+    <div class="ring-wrap">
+      <svg class="ring" viewBox="0 0 72 72">
+        <circle class="ring-bg" cx="36" cy="36" r="30"></circle>
+        <circle class="ring-fg" id="ringfg" cx="36" cy="36" r="30"></circle>
+      </svg>
+      <div class="ring-txt"><b id="left">0</b><span>남음</span></div>
+    </div>
+    <div class="acts">
+      <button class="pill-btn" id="btn-add">＋ 새 항목</button>
+      <button class="ico" id="btn-settings" title="설정">&#9881;</button>
+    </div>
+  </header>
+
+  <main class="grid">
+    <section class="col">
+      <div class="card">
+        <h2>오늘 <span class="badge" id="c-today">0</span><i class="h-note" id="today-note"></i></h2>
+        <div class="list" id="today"></div>
+      </div>
+    </section>
+    <section class="col">
+      <div class="card">
+        <h2>다가오는 마감 <span class="badge" id="c-up">0</span><i class="h-note">7일</i></h2>
+        <div class="list" id="upcoming"></div>
+      </div>
+      <div class="card f06">
+        <h2>메모 <span class="badge" id="c-float">0</span></h2>
+        <div class="list" id="floating"></div>
+      </div>
+      <div class="card fold" id="card-rt">
+        <h2 id="rt-head">반복 업무 <span class="badge" id="c-rt">0</span><i class="caret">▲</i></h2>
+        <div class="list" id="routines"></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <button class="link" id="btn-manage">전체 항목 관리</button>
+    <span id="status"></span>
+  </footer>
+</div>
+
+<div class="veil" id="veil"></div>
+
+<!-- ── 새 항목 ── -->
+<div class="modal wide" id="m-add">
+  <h3>새 항목</h3>
+  <div class="tabs" id="add-tabs">
+    <button data-k="routine" class="on">반복되는 일</button>
+    <button data-k="deadline">마감이 있는 일</button>
+    <button data-k="floating">기한 없는 메모</button>
+  </div>
+  <div class="row">
+    <div class="g14"><label>이름</label><input id="a-title"></div>
+    <div><label>메모 <i class="opt">(선택)</i></label><input id="a-note"></div>
+  </div>
+  <div id="a-body"></div>
+  <div class="btns">
+    <button class="ghost" data-close>취소</button>
+    <button id="a-save">추가</button>
+  </div>
+</div>
+
+<!-- ── 상세 / 수정 ── -->
+<div class="modal wide" id="m-edit">
+  <h3>항목 수정</h3>
+  <div class="row">
+    <div class="g14"><label>이름</label><input id="e-title"></div>
+    <div><label>메모 <i class="opt">(선택)</i></label><input id="e-note"></div>
+  </div>
+  <div id="e-body"></div>
+  <div class="btns split">
+    <div>
+      <button class="ghost danger" id="e-del">삭제</button>
+      <button class="ghost" id="e-skip">이번 회차 건너뛰기</button>
+    </div>
+    <div>
+      <button class="ghost" data-close>취소</button>
+      <button id="e-save">저장</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── 전체 관리 ── -->
+<div class="modal wide tall" id="m-manage">
+  <h3>전체 항목 <i class="opt">누르면 수정</i></h3>
+  <div class="tabs" id="mg-tabs">
+    <button data-k="all" class="on">전체</button>
+    <button data-k="routine">반복</button>
+    <button data-k="deadline">마감</button>
+    <button data-k="floating">메모</button>
+    <button data-k="done">완료</button>
+  </div>
+  <div class="mg-list" id="mg-list"></div>
+  <div class="btns"><button class="ghost" data-close>닫기</button></div>
+</div>
+
+<!-- ── 설정 ── -->
+<div class="modal" id="m-settings">
+  <h3>설정</h3>
+  <div class="row">
+    <div><label>기본 알림 (분 전)</label><input id="s-lead" class="min5" type="number" min="0" step="5"></div>
+    <div><label>아침 브리핑 시각</label><input id="s-brief" type="time" step="300" title="직접 입력할 수 있습니다 (5분 단위)"></div>
+  </div>
+  <label class="chk"><input type="checkbox" id="s-biz"> 영업일 기준으로만 쓰기 <i class="opt">(주말 선택 차단, 공휴일 자동 보정)</i></label>
+  <label class="chk"><input type="checkbox" id="s-auto"> Windows 시작할 때 자동 실행</label>
+  <div class="quick" style="margin-top:12px">
+    <button type="button" id="s-shortcut">바탕화면에 바로가기 만들기</button>
+  </div>
+  <p class="hint">알림 카드는 화면 우측 하단에 떠올랐다 사라집니다.<br>
+    창을 닫아도 프로그램은 뒤에서 계속 돌며 알림을 띄웁니다.<br>
+    <span class="opt">내 일정은 <code>%APPDATA%\To-Do Manager\data.json</code> 에 저장됩니다.</span></p>
+  <div class="btns split">
+    <div><button class="ghost danger" id="s-quit">종료</button></div>
+    <div>
+      <button class="ghost" id="s-test">알림 테스트</button>
+      <button class="ghost" data-close>닫기</button>
+      <button id="s-save">저장</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── 확인 ── -->
+<div class="modal narrow" id="m-confirm">
+  <h3 id="cf-title">확인</h3>
+  <p class="hint" id="cf-msg"></p>
+  <div class="btns"><button class="ghost" data-close>취소</button><button class="danger-solid" id="cf-ok">삭제</button></div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

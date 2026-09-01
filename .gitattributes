@@ -1,0 +1,11 @@
+# 소스는 LF 로 고정한다. CRLF 가 섞이면 스크립트 패치가 조용히 실패한다.
+*.py   text eol=lf
+*.js   text eol=lf
+*.css  text eol=lf
+*.html text eol=lf
+*.md   text eol=lf
+
+# VBScript 는 한글 때문에 UTF-16 이어야 한다 (변환 금지)
+*.vbs  binary
+*.ico  binary
+*.png  binary

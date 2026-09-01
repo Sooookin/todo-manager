@@ -1,0 +1,20 @@
+# 빌드 산출물
+build/
+dist/
+release/
+*.spec
+
+# 가상환경
+.venv/
+venv/
+
+# 파이썬
+__pycache__/
+*.py[cod]
+
+# 내 일정 (실제 데이터는 %APPDATA%\To-Do Manager 에 있다.
+# 저장소에는 어떤 형태로도 들어가면 안 된다 - 팀에 그대로 공유된다)
+data.json
+data.json.*
+*.log
+selftest.txt
