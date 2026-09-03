@@ -33,13 +33,17 @@
       </svg>
       <div class="ring-txt"><b id="left">0</b><span>남음</span></div>
     </div>
+    <div class="views" id="views">
+      <button data-v="home" class="on">오늘</button>
+      <button data-v="cal">달력</button>
+    </div>
     <div class="acts">
       <button class="pill-btn" id="btn-add">＋ 새 항목</button>
       <button class="ico" id="btn-settings" title="설정">&#9881;</button>
     </div>
   </header>
 
-  <main class="grid">
+  <main class="grid" id="v-home">
     <section class="col">
       <div class="card">
         <h2>오늘 <span class="badge" id="c-today">0</span><i class="h-note" id="today-note"></i></h2>
@@ -62,6 +66,27 @@
     </section>
   </main>
 
+  <section class="cal card" id="v-cal" hidden>
+    <div class="cal-top">
+      <button class="cbtn" id="cal-prev" title="이전 달">‹</button>
+      <b class="cal-ym" id="cal-ym">—</b>
+      <button class="cbtn" id="cal-next" title="다음 달">›</button>
+      <button class="link" id="cal-now">이번 달</button>
+      <div class="cal-gap"></div>
+      <span class="cal-legend">
+        <i class="sw p"></i>지남
+        <i class="sw t"></i>오늘
+        <i class="sw f"></i>예정
+        <i class="sw d"></i>완료
+      </span>
+      <i class="h-note" id="cal-note"></i>
+    </div>
+    <div class="cal-head">
+      <span>월</span><span>화</span><span>수</span><span>목</span><span>금</span>
+    </div>
+    <div class="cal-grid" id="cal-grid"></div>
+  </section>
+
   <footer class="foot">
     <button class="link" id="btn-manage">전체 항목 관리</button>
     <span id="status"></span>
@@ -69,6 +94,16 @@
 </div>
 
 <div class="veil" id="veil"></div>
+
+<!-- ── 하루 전체 (달력에서 +N 을 눌렀을 때) ── -->
+<div class="modal" id="m-day">
+  <h3 id="day-title">—</h3>
+  <div class="mg-list" id="day-list"></div>
+  <div class="btns split">
+    <div><button class="ghost" id="day-add">이 날짜에 마감 추가</button></div>
+    <div><button class="ghost" data-close>닫기</button></div>
+  </div>
+</div>
 
 <!-- ── 새 항목 ── -->
 <div class="modal wide" id="m-add">

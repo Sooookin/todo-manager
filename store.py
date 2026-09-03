@@ -247,6 +247,7 @@ def overview():
         "now": now.strftime("%H:%M"),
         "is_business_day": recur.is_business_day(today),
         "holidays": sorted(recur.HOLIDAYS),
+        "holiday_names": recur.HOLIDAY_NAMES,
         "overdue": overdue,
         "todays": todays,
         "upcoming": upcoming,

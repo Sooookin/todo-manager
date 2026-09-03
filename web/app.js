@@ -147,6 +147,7 @@ function render(o){
   $('#s-biz').checked = bizOn();
   $('#s-auto').checked = !!o.settings.autostart;
   if($('#m-manage').classList.contains('on')) drawManage();
+  if(view === 'cal') drawCal();
 }
 
 /* 시계 */
@@ -167,7 +168,13 @@ function toggleRt(){
 }
 $('#rt-head').onclick = toggleRt;
 
-const load = () => api('/api/overview').then(render);
+const load = () => api('/api/overview').then(o => {
+  render(o);
+  if(!load._first){                 /* 주소에 #cal 이 있으면 달력으로 시작 */
+    load._first = true;
+    if(location.hash === '#cal') setView('cal');
+  }
+});
 
 /* ══════════ 모달 ══════════ */
 function openM(id){ $('#veil').classList.add('on'); $(id).classList.add('on'); }
@@ -179,6 +186,11 @@ document.onkeydown = e => {
   if(e.key === 'Escape'){
     if(!$$('.modal.on').length && rtCard.classList.contains('open')) return toggleRt();
     closeAll();
+  }
+  /* 달력을 보고 있을 때만 좌우로 달 넘기기 (입력 중에는 방해하지 않는다) */
+  if(view === 'cal' && !$$('.modal.on').length && /^Arrow(Left|Right)$/.test(e.key)){
+    shiftMonth(e.key === 'ArrowLeft' ? -1 : 1);
+    return;
   }
   if(e.key === 'Enter' && e.target.tagName !== 'BUTTON'){
     if($('#m-add').classList.contains('on')) $('#a-save').click();
@@ -402,14 +414,15 @@ $('#add-tabs').onclick = e => {
   addKind = b.dataset.k;
   addForm.render(addKind, {});
 };
-$('#btn-add').onclick = () => {
+function openAdd(kind, seed){
   $('#a-title').value = ''; $('#a-note').value = '';
-  addKind = 'routine';
-  $$('#add-tabs button').forEach(x => x.classList.toggle('on', x.dataset.k === 'routine'));
-  addForm.render('routine', {});
+  addKind = kind || 'routine';
+  $$('#add-tabs button').forEach(x => x.classList.toggle('on', x.dataset.k === addKind));
+  addForm.render(addKind, seed || {});
   openM('#m-add');
   setTimeout(() => $('#a-title').focus(), 90);
-};
+}
+$('#btn-add').onclick = () => openAdd('routine', {});
 $('#a-save').onclick = () => {
   const title = $('#a-title').value.trim();
   if(!title){ say('이름을 입력하세요'); return $('#a-title').focus(); }
@@ -453,6 +466,181 @@ function confirmBox(title, msg, onOk){
   $('#cf-ok').onclick = onOk;
   openM('#m-confirm');
 }
+
+/* ══════════ 달력 ══════════
+   영업일만 쓰는 도구이므로 월~금 5칸만 만든다. 칸이 40% 넓어져서
+   한 칸에 일정 여러 개를 넣어도 제목이 읽힌다.
+   표시 대상은 "마감이 있는 일" 뿐이다. 반복 업무는 넣지 않는다 -
+   매달 되풀이되는 항목이 칸을 다 차지해서 정작 마감이 안 보이게 된다. */
+const CAL_MAX = 3;                  /* 한 칸에 보여줄 최대 개수, 나머지는 +N */
+let calCur = null;                  /* 보고 있는 달 {y, m} - m 은 0~11 */
+let view = 'home';
+
+function deadlines(){
+  return (STATE.tasks || []).filter(t => (t.kind || 'deadline') === 'deadline' && t.due_date);
+}
+
+/* 달력의 항목을 수정 창에 넘길 형태로 맞춘다 (STATE.tasks 는 저장 형식) */
+function asItem(t){
+  return {id:t.id, title:t.title, note:t.note || '', kind:'deadline', rule:null,
+          date:t.due_date || null, time:t.due_time || '',
+          notify_min:t.notify_min != null ? t.notify_min : null,
+          muted:!!t.muted, rule_text:'', done:!!t.done};
+}
+
+/* 주말에 걸린 마감을 어느 칸에 놓을지.
+
+   주말 칸이 없으므로 그냥 두면 화면에서 사라진다. 가까운 영업일 칸에 얹고
+   칩에 실제 날짜를 적어 준다. 앞 영업일이 다른 달로 넘어가는 경우(1일이 일요일 등)
+   에는 뒤로 미뤄서, 반드시 자기 달 안에서 보이게 한다. */
+function isWeekend(d){ const w = dObj(d).getDay(); return w === 0 || w === 6; }
+
+function cellDate(d){
+  if(!isWeekend(d)) return d;
+  const m = d.slice(0, 7);
+  const back = dObj(d), fwd = dObj(d);
+  while(isWeekend(iso(back))) back.setDate(back.getDate() - 1);
+  if(iso(back).slice(0, 7) === m) return iso(back);
+  while(isWeekend(iso(fwd))) fwd.setDate(fwd.getDate() + 1);
+  return iso(fwd);
+}
+
+function chipEl(t){
+  const el = document.createElement('div');
+  const cls = t.done ? 'done' : t.due_date < STATE.today ? 'p'
+            : t.due_date === STATE.today ? 't' : 'f';
+  const wk = isWeekend(t.due_date);
+  el.className = 'chip ' + cls + (wk ? ' wk' : '');
+  const d = dObj(t.due_date);
+  const head = wk ? d.getDate() + '일(' + WD[(d.getDay() + 6) % 7] + ')' : t.due_time;
+  el.innerHTML = (head ? '<span class="h">' + head + '</span>' : '') +
+                 '<span class="n2">' + esc(t.title) + '</span>';
+  el.title = fmtDay(t.due_date) + (t.due_time ? ' ' + t.due_time : '') + '  ' + t.title +
+             (wk ? String.fromCharCode(10) + '주말 마감이라 앞 영업일 칸에 표시했습니다' : '') +
+             (t.note ? String.fromCharCode(10) + t.note : '') +
+             (t.done ? String.fromCharCode(10) + '(완료)' : '');
+  el.onclick = e => { e.stopPropagation(); openEdit(asItem(t)); };
+  return el;
+}
+
+function dayModal(key, list){
+  /* 주말 마감을 앞 영업일 칸에 얹었으므로, 목록에서는 실제 날짜를 밝혀 준다 */
+  const wknd = list.filter(t => isWeekend(t.due_date)).length;
+  $('#day-title').innerHTML = fmtDay(key) + ' <i class="opt">' + list.length + '건' +
+    (wknd ? ' · 주말 마감 ' + wknd + '건 포함' : '') + '</i>';
+  const box = $('#day-list');
+  box.innerHTML = '';
+  list.forEach(t => {
+    const el = document.createElement('div');
+    el.className = 'mg-row' + (t.done ? ' off' : '');
+    const d = dObj(t.due_date);
+    const when = (isWeekend(t.due_date)
+        ? d.getDate() + '일(' + WD[(d.getDay() + 6) % 7] + ') ' : '') +
+      (t.due_time || (isWeekend(t.due_date) ? '' : '시각 없음'));
+    el.innerHTML = '<span class="k">마감</span><span class="n">' + esc(t.title) +
+                   '</span><span class="w">' + esc(when.trim()) + '</span>';
+    el.onclick = () => { closeM('#m-day'); openEdit(asItem(t)); };
+    box.appendChild(el);
+  });
+  $('#day-add').onclick = () => { closeM('#m-day'); openAdd('deadline', {date:key}); };
+  openM('#m-day');
+}
+
+function drawCal(){
+  if(!STATE) return;
+  if(!calCur){ const d = dObj(STATE.today); calCur = {y:d.getFullYear(), m:d.getMonth()}; }
+  const y = calCur.y, m = calCur.m;
+  $('#cal-ym').textContent = y + '년 ' + (m + 1) + '월';
+
+  const byDate = {};
+  deadlines().forEach(t => {
+    const k = cellDate(t.due_date);
+    (byDate[k] = byDate[k] || []).push(t);
+  });
+  Object.keys(byDate).forEach(k => byDate[k].sort((a, b) =>
+    (a.done ? 1 : 0) - (b.done ? 1 : 0) ||
+    a.due_date.localeCompare(b.due_date) ||
+    (a.due_time || '99:99').localeCompare(b.due_time || '99:99')));
+
+  const pre = y + '-' + String(m + 1).padStart(2, '0');
+  const mine = deadlines().filter(t => t.due_date.slice(0, 7) === pre);
+  const cnt = mine.length, left = mine.filter(t => !t.done).length;
+  $('#cal-note').textContent = cnt ? cnt + '건 · ' + left + '건 남음' : '마감 없음';
+
+  /* 그 달의 첫 주 월요일부터, 마지막 날이 포함된 주까지 */
+  const first = new Date(y, m, 1), last = new Date(y, m + 1, 0);
+  const cur = new Date(first);
+  cur.setDate(first.getDate() - ((first.getDay() + 6) % 7));
+  const hasWeekday = mon => {                 /* 그 주 월~금 중 이 달에 속한 날이 있나 */
+    for(let k = 0; k < 5; k++){
+      const d = new Date(mon); d.setDate(mon.getDate() + k);
+      if(d.getMonth() === m) return true;
+    }
+    return false;
+  };
+  while(!hasWeekday(cur)) cur.setDate(cur.getDate() + 7);
+  const grid = $('#cal-grid');
+  grid.innerHTML = '';
+  const HN = STATE.holiday_names || {};
+
+  while(cur <= last && hasWeekday(cur)){
+    for(let k = 0; k < 5; k++){                                   /* 월~금만 */
+      const d = new Date(cur); d.setDate(cur.getDate() + k);
+      const key = iso(d);
+      const out = d.getMonth() !== m;
+      const hol = HOL.has(key);
+      const cell = document.createElement('div');
+      cell.className = 'day' + (out ? ' out' : '') + (hol && !out ? ' hol' : '') +
+                       (key === STATE.today ? ' now' : '');
+      const num = key === STATE.today ? '<b>' + d.getDate() + '</b>' : d.getDate();
+      cell.innerHTML = '<div class="n">' + num +
+        (hol && !out ? '<span class="hn">' + esc(HN[key] || '공휴일') + '</span>' : '') +
+        '</div>';
+      if(!out){
+        const list = byDate[key] || [];
+        const chips = document.createElement('div');
+        chips.className = 'chips';
+        list.slice(0, CAL_MAX).forEach(t => chips.appendChild(chipEl(t)));
+        cell.appendChild(chips);
+        if(list.length > CAL_MAX){
+          const more = document.createElement('div');
+          more.className = 'more';
+          more.textContent = '+' + (list.length - CAL_MAX) + '건 더';
+          more.onclick = e => { e.stopPropagation(); dayModal(key, list); };
+          cell.appendChild(more);
+        }
+        cell.onclick = () => list.length > CAL_MAX ? dayModal(key, list)
+                                                   : openAdd('deadline', {date:key});
+        cell.title = hol ? (HN[key] || '공휴일') + ' · 영업일이 아닙니다'
+                         : '눌러서 이 날짜에 마감 추가';
+      }
+      grid.appendChild(cell);
+    }
+    cur.setDate(cur.getDate() + 7);
+  }
+}
+
+function shiftMonth(n){
+  if(!calCur){ const d = dObj(STATE.today); calCur = {y:d.getFullYear(), m:d.getMonth()}; }
+  const t = new Date(calCur.y, calCur.m + n, 1);
+  calCur = {y:t.getFullYear(), m:t.getMonth()};
+  drawCal();
+}
+
+function setView(v){
+  view = v;
+  $$('#views button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
+  $('#v-home').hidden = v !== 'home';
+  $('#v-cal').hidden = v !== 'cal';
+  if(v === 'cal') drawCal();
+}
+$('#views').onclick = e => {
+  const b = e.target.closest('button');
+  if(b) setView(b.dataset.v);
+};
+$('#cal-prev').onclick = () => shiftMonth(-1);
+$('#cal-next').onclick = () => shiftMonth(1);
+$('#cal-now').onclick = () => { calCur = null; drawCal(); };
 
 /* ══════════ 전체 관리 ══════════ */
 let mgKind = 'all';
