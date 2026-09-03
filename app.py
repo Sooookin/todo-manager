@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """To-Do Manager - 백그라운드 서비스: API 서버 + 알림 스케줄러 + 알림 카드 루프."""
-import json, os, socket, subprocess, sys, threading, time, traceback, webbrowser
+import ctypes, json, os, socket, subprocess, sys, threading, time, traceback, webbrowser
 from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -27,8 +27,58 @@ def log(msg):
     paths.log(msg)
 
 
+class Server(ThreadingHTTPServer):
+    """allow_reuse_address 를 반드시 꺼야 한다.
+
+    http.server 는 기본값이 1 이고, Windows 의 SO_REUSEADDR 은 리눅스와 달리
+    "이미 듣고 있는 주소에 또 bind 하는 것"을 허용한다. 그래서 bind 성공 여부로
+    중복 실행을 판단할 수 없었고, 앱을 다시 켤 때마다 서비스가 하나씩 늘어났다.
+    (스케줄러도 같이 늘어나 알림이 겹쳐 떴다)
+    """
+    allow_reuse_address = False
+    daemon_threads = True
+
+
+_lock_handle = None          # 핸들을 살려둬야 잠금이 유지된다
+
+
+def acquire_single_instance():
+    """이미 다른 인스턴스가 돌고 있으면 False."""
+    global _lock_handle
+    try:
+        k32 = ctypes.windll.kernel32
+        k32.CreateMutexW.restype = ctypes.c_void_p
+        h = k32.CreateMutexW(None, False, r"Local\TodoManager.Service")
+        if h and k32.GetLastError() == 183:            # ERROR_ALREADY_EXISTS
+            return False
+        _lock_handle = h
+        return True
+    except Exception:
+        log("단일 실행 잠금 실패(무시): " + traceback.format_exc())
+        return True
+
+
+def focus_ui():
+    """이미 떠 있는 창을 앞으로 불러온다. 창이 없으면 False.
+
+    창 프로세스를 새로 띄우는 데 몇 초가 걸리므로, 살아 있는 창이 있으면
+    프로세스를 만들지 않고 그 창을 쓴다.
+    """
+    try:
+        with socket.create_connection((HOST, UI_PORT), 0.5) as sock:
+            sock.sendall(b"GET /focus HTTP/1.0" + CRLF + CRLF)
+            # 응답이 오면 창이 살아 있는 것이다. 본문("ok")까지 기다리면 안 된다 -
+            # recv 한 번은 헤더만 담고 끝나기도 한다.
+            return bool(sock.recv(64))
+    except OSError:
+        return False
+
+
 def open_window():
     """앱 창을 새 프로세스로 띄운다. pywebview 를 못 쓰면 Edge 앱 창으로 폴백."""
+    if focus_ui():
+        log("open_window: 이미 떠 있는 창을 앞으로 불러왔다")
+        return
     log(f"open_window: frozen={paths.FROZEN} exe={sys.executable!r}")
     try:
         import webview  # noqa: F401
@@ -191,44 +241,79 @@ def scheduler():
         time.sleep(20)
 
 
+def _plus(hhmm, minutes):
+    """'08:30' + 120분 -> '10:30'. 자정을 넘으면 23:59 로 자른다."""
+    try:
+        h, m = int(hhmm[:2]), int(hhmm[3:5])
+    except (ValueError, IndexError):
+        return "23:59"
+    total = h * 60 + m + minutes
+    return "23:59" if total >= 24 * 60 else "%02d:%02d" % (total // 60, total % 60)
+
+
 def tick():
     now = datetime.now()
+    hm = now.strftime("%H:%M")
     d = store.load()
     st = d.get("settings", {})
     default_lead = timedelta(minutes=int(st.get("notify_min", 30)))
+
+    first_tick = not getattr(tick, "_ran", False)
+    tick._ran = True
 
     o = store.overview()
     left = o["stats"]["left"]
     tray.set_title(f"To-Do Manager · {left}건 남음" if left else "To-Do Manager · 급한 일 없음")
 
+    # 브리핑은 시각이 지난 뒤 2시간 안에만. 그러지 않으면 저녁에 프로그램을 켰을 때
+    # 아침 브리핑이 그제서야 떠오른다.
     brief = st.get("brief_time", "08:30")
-    if brief and now.strftime("%H:%M") >= brief:
+    if brief and brief <= hm <= _plus(brief, 120):
         if (left or o["overdue"]) and _mark(f"brief:{now.date()}"):
-            first = (o["overdue"] + [i for i in o["todays"] if not i["done"]])[:1]
+            head = (o["overdue"] + [i for i in o["todays"] if not i["done"]])[:1]
             tail = f" 외 {left-1}건" if left > 1 else ""
             toast.notify(f"오늘 할 일 {left}건",
-                         (first[0]["title"] if first else "") + tail, accent="#85bdb3")
+                         (head[0]["title"] if head else "") + tail, accent="#85bdb3",
+                         key=f"brief:{now.date()}")
 
     for i in store.instances(back=1, ahead=1, data=d):
         if i["done"] or not i["due"] or i.get("muted"):
             continue
         due = datetime.fromisoformat(i["due"])
         lead = timedelta(minutes=i["notify_min"]) if i["notify_min"] is not None else default_lead
-        if due - lead <= now <= due + timedelta(minutes=90):
-            if _mark(f"{i['id']}:{i['date']}:{i['time']}"):
-                mins = int((due - now).total_seconds() // 60)
-                sub = f"{mins}분 뒤 마감 · {i['time']}" if mins > 0 else f"마감 시간 지남 · {i['time']}"
-                tid, day = i["id"], i["date"]
-                toast.notify(i["title"], sub, accent="#08202b" if mins <= 0 else "#4d7572",
-                             on_done=lambda tid=tid, day=day: store.toggle_done(tid, day))
+        if not (due - lead <= now <= due + timedelta(minutes=90)):
+            continue
+        key = f"{i['id']}:{i['date']}:{i['time']}"
+        mins = int((due - now).total_seconds() // 60)
+        if first_tick and mins <= 0:
+            # 프로그램을 켠 첫 순간에 이미 지나간 마감까지 한꺼번에 띄우면
+            # 카드가 무더기로 겹쳐 뜬다. 표시만 해두고 넘어간다.
+            _mark(key)
+            continue
+        if _mark(key):
+            sub = f"{mins}분 뒤 마감 · {i['time']}" if mins > 0 else f"마감 시간 지남 · {i['time']}"
+            tid, day = i["id"], i["date"]
+            toast.notify(i["title"], sub, accent="#08202b" if mins <= 0 else "#4d7572",
+                         on_done=lambda tid=tid, day=day: store.toggle_done(tid, day),
+                         key=f"{tid}:{day}")
 
 
 def main():
     paths.log("main: 시작 (frozen=%s)" % paths.FROZEN)
+    silent = "--silent" in sys.argv
+
+    # 이미 백그라운드에 돌고 있으면 서비스를 또 띄우지 않는다.
+    # 바탕화면 아이콘을 다시 눌렀을 때 기대하는 동작은 "그 창을 열어라" 이다.
+    if not acquire_single_instance():
+        paths.log("main: 이미 실행 중 → 기존 창만 열고 종료")
+        if not silent:
+            open_window()
+        return
     try:
-        srv = ThreadingHTTPServer((HOST, PORT), Handler)
+        srv = Server((HOST, PORT), Handler)
     except OSError:
-        open_window()          # 서비스가 이미 돌고 있음 → 창만 열기
+        paths.log("main: 포트 사용 중 → 기존 창만 열고 종료")
+        open_window()
         return
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     threading.Thread(target=scheduler, daemon=True).start()
@@ -237,7 +322,33 @@ def main():
                on_test=lambda: toast.notify("알림 미리보기", "이런 모양으로 떠올랐다 사라집니다"),
                on_quit=shutdown)
     paths.log("main: tray 완료, toast.run_forever 진입")
-    toast.run_forever(on_ready=None if "--silent" in sys.argv else open_window)
+    toast.run_forever(on_ready=(prewarm_window if silent else open_window))
+
+
+def prewarm_window():
+    """창을 숨긴 채로 미리 만들어 둔다.
+
+    창 프로세스는 WebView2 초기화까지 몇 초가 걸린다. 자동 실행으로 조용히
+    떠 있을 때 미리 만들어 두면, 트레이나 바로가기로 열 때 곧바로 나타난다.
+    """
+    if focus_ui():
+        return
+    try:
+        if paths.FROZEN:
+            subprocess.Popen([sys.executable, "--ui", "--hidden"], cwd=BASE,
+                             creationflags=NO_WINDOW,
+                             stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+        else:
+            exe = sys.executable or "python.exe"
+            pyw = os.path.join(os.path.dirname(exe), "pythonw.exe")
+            runner = pyw if os.path.exists(pyw) else exe
+            subprocess.Popen([runner, os.path.join(BASE, "main.py"), "--ui", "--hidden"],
+                             cwd=BASE, creationflags=NO_WINDOW)
+        log("prewarm_window: 숨긴 창 미리 생성")
+    except Exception:
+        log("prewarm_window 실패(무시): " + traceback.format_exc())
 
 
 if __name__ == "__main__":

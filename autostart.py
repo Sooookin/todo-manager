@@ -12,8 +12,15 @@ NO_WINDOW = 0x08000000
 
 
 def _cmd():
+    """로그인할 때 실행할 명령.
+
+    --silent 를 붙여 창을 띄우지 않고 조용히 시작한다. 대신 창을 숨긴 채로
+    미리 만들어 두므로(app.prewarm_window), 나중에 아이콘을 누르면 곧바로 열린다.
+    """
     p = paths.exe_path()
-    return p if p.startswith('"') else f'"{p}"'
+    if not p.startswith('"'):
+        p = f'"{p}"'
+    return p + " --silent"
 
 
 def is_enabled():

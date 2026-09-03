@@ -7,6 +7,7 @@
 """
 import ctypes
 import queue
+import time
 import traceback
 
 import paths
@@ -41,8 +42,27 @@ _root = None
 _use_layered = True
 
 
-def notify(title, sub="", accent=ACCENT, on_done=None):
-    _queue.put({"title": title, "sub": sub, "accent": accent, "on_done": on_done})
+LIFE_MS = 9000                # 카드가 화면에 머무는 시간
+HARD_LIFE = 20                # 이 초를 넘긴 카드는 무조건 없앤다 (초)
+MAX_CARDS = 3
+
+_seen = {}                    # key -> 마지막으로 띄운 시각
+
+
+def notify(title, sub="", accent=ACCENT, on_done=None, key=None):
+    """같은 알림이 겹쳐 쌓이지 않게 key 로 한 번 걸러낸다.
+
+    key 를 주지 않으면 제목+내용을 키로 쓴다. 60초 안에 같은 키가 다시 오면 버린다.
+    """
+    k = key or (title + "|" + sub)
+    now = time.time()
+    for old_key, t in list(_seen.items()):
+        if now - t > 300:
+            _seen.pop(old_key, None)
+    if now - _seen.get(k, 0) < 60:
+        return
+    _seen[k] = now
+    _queue.put({"title": title, "sub": sub, "accent": accent, "on_done": on_done, "key": k})
 
 
 # ---------------- 그리기 ----------------
@@ -306,7 +326,9 @@ class Card(tk.Toplevel):
             w.bind("<Motion>", self._motion)
             w.bind("<Leave>", self._leave)
 
-        self.after(9000, self.close)
+        self.born = time.time()
+        self._closing = False
+        self.after(LIFE_MS, self.close)
 
     # --- 폴백: 캔버스로 직접 그리기 ---
     def _build_canvas(self, item):
@@ -458,14 +480,18 @@ class Card(tk.Toplevel):
         self.after(16, lambda: self.fade(target, step))
 
     def close(self):
-        if self in _live:
-            self._closing = True
-            self.fade(0, -30)
+        if self._closing or self not in _live:
+            return
+        self._closing = True
+        self.fade(0, -30)
 
     def _destroy(self):
         if self in _live:
             _live.remove(self)
-        self.destroy()
+        try:
+            self.destroy()
+        except Exception:
+            pass
         _layout()
 
 
@@ -492,8 +518,10 @@ def _pump():
             except queue.Empty:
                 break
             try:
-                if len(_live) >= 4:
-                    _live[0].close()
+                while len(_live) >= MAX_CARDS:
+                    # 가장 오래된 것부터 즉시 없앤다. fade 를 기다리면 그 사이
+                    # 새 카드가 위로 쌓여 화면을 넘어간다.
+                    _live[0]._destroy()
                 card = Card(_root, item)
                 _live.append(card)
                 _layout()
@@ -502,9 +530,26 @@ def _pump():
                 paths.log("toast: " + traceback.format_exc())
     except Exception:
         paths.log("toast: " + traceback.format_exc())
+    try:
+        _sweep()
+    except Exception:
+        paths.log("toast: " + traceback.format_exc())
     finally:
         # 무슨 일이 있어도 다음 회차를 예약한다
         _root.after(300, _pump)
+
+
+def _sweep():
+    """수명을 넘긴 카드를 강제로 없앤다.
+
+    fade 는 Tk 의 after 로 이어지는데, 중간에 한 번 예외가 나면 그 사슬이
+    끊겨 카드가 화면에 그대로 남는다. 그러면 다음 알림이 그 위에 겹쳐 떠서
+    "지난 알림이 계속 보이는" 것처럼 된다. 마지막 안전망.
+    """
+    now = time.time()
+    for card in list(_live):
+        if now - getattr(card, "born", now) > HARD_LIFE:
+            card._destroy()
 
 
 def _safe(fn, tag):
