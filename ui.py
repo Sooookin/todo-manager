@@ -190,6 +190,11 @@ def main():
         frameless=True, easy_drag=False, background_color="#DDE3E2",
         hidden="--hidden" in sys.argv,      # 자동 실행 때 미리 만들어만 둔다
     )
+    if "--hidden" not in sys.argv:
+        # 부모 프로세스의 표시 상태가 딸려와 최소화된 채로 뜨는 때가 있다.
+        # 창이 만들어진 뒤 한 번 앞으로 불러온다.
+        threading.Timer(1.5, focus).start()
+
     icon = paths.ICON
     try:
         webview.start(icon=icon if os.path.exists(icon) else None)

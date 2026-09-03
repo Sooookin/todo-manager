@@ -73,10 +73,19 @@ def draw(px):
     return im.resize((px, px), Image.LANCZOS)
 
 
+# 화면에서 직접 쓰는 크기는 PNG 로도 따로 내보낸다.
+# 큰 PNG 하나를 브라우저나 트레이가 축소하면 흐려지기 때문.
+WEB_PNGS = [16, 32, 64, 256]
+
+
 def main():
     frames = [draw(s) for s in SIZES]
-    big = draw(256)
-    big.save(os.path.join(HERE, "web", "icon.png"))
+    by_size = dict(zip(SIZES, frames))
+    for n in WEB_PNGS:
+        img = by_size.get(n) or draw(n)
+        name = "icon.png" if n == 256 else f"icon-{n}.png"
+        img.save(os.path.join(HERE, "web", name))
+        print("web/" + name)
     # Pillow 의 ICO 저장은 sizes 로 넘긴 크기를 스스로 축소하므로,
     # 크기별로 따로 그린 프레임을 append_images 로 직접 넣는다.
     frames[-1].save(os.path.join(HERE, "app.ico"), format="ICO",

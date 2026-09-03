@@ -8,12 +8,38 @@ BASE = paths.RES_DIR
 _icon = None
 
 
+def _tray_size():
+    """Windows 가 알림영역에 쓰는 크기 (배율 100%%에서 16)."""
+    try:
+        import ctypes
+        return ctypes.windll.user32.GetSystemMetrics(49) or 16   # SM_CXSMICON
+    except Exception:
+        return 16
+
+
 def _image():
+    """알림영역 아이콘. 필요한 크기로 "그려둔" 그림을 그대로 쓴다.
+
+    큰 그림을 넣으면 Windows 가 16px 로 축소하면서 흐려진다. app.ico 에는
+    크기별로 따로 그린 프레임이 들어 있으므로(gen_icon.py) 그중 맞는 것을 꺼낸다.
+    """
     from PIL import Image
-    png = os.path.join(paths.WEB_DIR, "icon.png")
-    if os.path.exists(png):
-        return Image.open(png).convert("RGBA").resize((64, 64), Image.LANCZOS)
-    return Image.new("RGBA", (64, 64), (13, 44, 54, 255))
+    n = _tray_size()
+    try:
+        ico = Image.open(paths.ICON)
+        avail = sorted(ico.ico.sizes())
+        pick = next((s for s in avail if s[0] >= n), avail[-1])
+        ico.size = pick
+        im = ico.convert("RGBA")
+        return im if im.size == (n, n) else im.resize((n, n), Image.LANCZOS)
+    except Exception:
+        pass
+    for name in (f"icon-{n}.png", "icon-16.png", "icon.png"):
+        png = os.path.join(paths.WEB_DIR, name)
+        if os.path.exists(png):
+            im = Image.open(png).convert("RGBA")
+            return im if im.size == (n, n) else im.resize((n, n), Image.LANCZOS)
+    return Image.new("RGBA", (n, n), (13, 44, 54, 255))
 
 
 def _quit(cb):
