@@ -50,6 +50,19 @@ def selftest():
     except Exception:
         lines.append("  " + traceback.format_exc().replace("\n", "\n  "))
 
+    lines += ["", "[알림 점검] 어제~내일의 각 회차가 언제 알려지는지"]
+    try:
+        import app
+        plan = app.notify_plan()
+        lines.append("  지금 %s · 기본 알림 %d분 전" % (plan["now"], plan["default_lead_min"]))
+        for r in plan["rows"]:
+            mark = "예정" if r["will_notify"] else ("이미 띄움" if r["already_fired"] else "건너뜀")
+            lines.append("  %s %5s  알림 %-11s  %-9s %-14s %s"
+                         % (r["date"], r["time"] or "--:--", r["notify_at"] or "-",
+                            mark, r["skip"], r["title"][:24]))
+    except Exception:
+        lines.append("  " + traceback.format_exc().replace(chr(10), chr(10) + "  "))
+
     with open(out, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 

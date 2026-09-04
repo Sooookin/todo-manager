@@ -26,12 +26,19 @@ DEEP    = "#08202b"
 TRANSP  = "#ff00ff"
 
 PAD = 18                      # 그림자가 번질 여백
-CW, CH = 340, 150             # 카드 본체
+CW, CH = 380, 162             # 카드 본체 (제목 두 줄이 들어갈 만큼)
 W, H = CW + PAD * 2, CH + PAD * 2
 R, GAP = 20, 6
 BTN = (22, CH - 44, CW - 44, 28)      # 완료 버튼 - 하단 전체 폭, 얇은 알약형
 CLOSE = (CW - 42, 12, 28, 28)         # ✕ 영역
 BTN_FACE = "#e7ecea"                  # 살짝 밝게 → 올라온 면처럼 보이게
+
+# 글자 자리. 오른쪽은 ✕ 자리를 비워 둔다.
+TX, TY = 42, 25
+TW = CW - TX - 44
+TITLE_PX, SUB_PX = 13, 11             # 예전 15/12 는 글자가 커서 제목이 잘렸다
+LINE_H = 18
+TITLE_LINES = 2
 
 FONTS = [r"C:\Windows\Fonts\malgun.ttf", r"C:\Windows\Fonts\NotoSansKR-VF.ttf"]
 FONTS_BD = [r"C:\Windows\Fonts\malgunbd.ttf", r"C:\Windows\Fonts\malgun.ttf"]
@@ -42,8 +49,9 @@ _root = None
 _use_layered = True
 
 
-LIFE_MS = 9000                # 카드가 화면에 머무는 시간
-HARD_LIFE = 20                # 이 초를 넘긴 카드는 무조건 없앤다 (초)
+LIFE_MS = 11000               # 카드가 화면에 머무는 시간
+HOLD_MAX = 25                 # 마우스를 올려두면 이 초까지는 기다린다
+HARD_LIFE = 32                # 이 초를 넘긴 카드는 무조건 없앤다
 MAX_CARDS = 3
 
 _seen = {}                    # key -> 마지막으로 띄운 시각
@@ -107,14 +115,63 @@ def _x_mark(size, color, alpha, thick=1.6, scale=4):
     return layer
 
 
-_imgcache = {}
+def _wrap(text, font, width, max_lines=TITLE_LINES):
+    """픽셀 폭을 재서 줄을 나눈다.
+
+    글자 수로 자르면(예전 방식) 한글 제목이 어이없이 잘린다. 한국어는 공백이
+    드물어서 낱말 단위로만 끊을 수도 없으므로, 기본은 글자 단위로 채우고
+    끊을 자리 근처에 공백이 있으면 거기서 끊는다.
+    """
+    text = " ".join((text or "").split())
+    if not text:
+        return [""]
+    lines, i, n = [], 0, len(text)
+    while i < n and len(lines) < max_lines:
+        lo, hi = i + 1, n
+        while lo < hi:                                  # 이 줄에 들어갈 마지막 글자
+            mid = (lo + hi + 1) // 2
+            if font.getlength(text[i:mid]) <= width:
+                lo = mid
+            else:
+                hi = mid - 1
+        end = lo
+        if end < n and len(lines) < max_lines - 1:      # 마지막 줄이 아니면
+            sp = text.rfind(" ", i + 1, end + 1)
+            if sp > i and end - sp < 8:                 # 공백이 가까우면 거기서
+                end = sp
+        lines.append(text[i:end].rstrip())
+        i = end
+        while i < n and text[i] == " ":
+            i += 1
+    if i < n and lines:                                 # 남은 글자가 있다는 표시
+        last = lines[-1]
+        while last and font.getlength(last + "\u2026") > width:
+            last = last[:-1]
+        lines[-1] = last + "\u2026"
+    return lines
 
 
-def _card_rgba(item, hover=None):
-    """카드 한 장을 RGBA 이미지로. hover 는 None / 'btn' / 'x'."""
-    key = (item["accent"], hover)
-    if key in _imgcache:
-        return _imgcache[key]
+def _fit(text, font, width):
+    """한 줄에 맞게 자른다 (부제목용)."""
+    text = " ".join((text or "").split())
+    if font.getlength(text) <= width:
+        return text
+    while text and font.getlength(text + "\u2026") > width:
+        text = text[:-1]
+    return text + "\u2026"
+
+
+# 그림자·버튼·✕ 는 그리는 비용이 크고 내용과 무관하므로 여기 담아 둔다.
+# 글자는 절대 담지 않는다 - 예전에는 카드 전체를 (accent, hover) 로만 담아서,
+# 같은 색의 두 번째 알림이 첫 번째 알림의 글자를 그대로 다시 띄웠다.
+_bgcache = {}
+
+
+def _card_bg(accent, hover, label="완료"):
+    """글자를 뺀 카드 바탕. hover 는 None / 'btn' / 'x'."""
+    key = (accent, hover, label)
+    if key in _bgcache:
+        return _bgcache[key]
 
     from PIL import Image, ImageDraw, ImageFilter
 
@@ -133,27 +190,23 @@ def _card_rgba(item, hover=None):
     card = Image.new("RGBA", (CW, CH), (0, 0, 0, 0))
     d = ImageDraw.Draw(card)
 
-    # 왼쪽 강조 바 (제목 옆에만)
-    card.paste(Image.new("RGBA", (4, 48), _rgb(item["accent"]) + (255,)),
-               (24, 28), _round((4, 48), 2))
+    # 왼쪽 강조 바 (글자 블록 옆)
+    card.paste(Image.new("RGBA", (4, 52), _rgb(accent) + (255,)),
+               (24, TY + 1), _round((4, 52), 2))
 
-    f_title = _font(FONTS_BD, 15)
-    f_sub = _font(FONTS, 12)
     f_btn = _font(FONTS_BD, 12)
-    d.text((44, 27), item["title"][:24], font=f_title, fill=_rgb(TEXT) + (255,))
-    d.text((44, 54), item["sub"][:32], font=f_sub, fill=_rgb(MUTED) + (255,))
 
     # ── 완료 버튼: 하단 전체 폭, 확실히 올라온 면 ──
     bx, by, bw, bh = BTN
     br = bh // 2          # 얇은 알약형
     btn = Image.new("RGBA", (CW, CH), (0, 0, 0, 0))
     if hover == "btn":
-        face, label = item["accent"], DEEP
+        face, face_label = accent, DEEP
         # 눌러 내려간 느낌 (안쪽 음영)
         sh = Image.new("RGBA", (bw, bh), _rgb(DEEP) + (70,))
         btn.paste(sh, (bx, by + 2), _round((bw, bh), br))
     else:
-        face, label = BTN_FACE, ACCENT
+        face, face_label = BTN_FACE, ACCENT
         for off, col, a, blur in (((0, 3), SHADOW, 150, 3), ((0, -2), LIGHT, 205, 2)):
             l = Image.new("RGBA", (CW, CH), (0, 0, 0, 0))
             l.paste(Image.new("RGBA", (bw, bh), _rgb(col) + (a,)),
@@ -161,8 +214,8 @@ def _card_rgba(item, hover=None):
             btn.alpha_composite(l.filter(ImageFilter.GaussianBlur(blur)))
     btn.paste(Image.new("RGBA", (bw, bh), _rgb(face) + (255,)), (bx, by), _round((bw, bh), br))
     card.alpha_composite(btn)
-    d.text((bx + bw / 2, by + bh / 2 - 1), "완료", font=f_btn, anchor="mm",
-           fill=_rgb(label) + (255,))
+    d.text((bx + bw / 2, by + bh / 2 - 1), label, font=f_btn, anchor="mm",
+           fill=_rgb(face_label) + (255,))
 
     # ── 닫기 ✕ ──
     cx, cy, cw, ch = CLOSE
@@ -173,7 +226,30 @@ def _card_rgba(item, hover=None):
     card.alpha_composite(xm, (cx + (cw - 14) // 2, cy + (ch - 14) // 2))
 
     img.alpha_composite(card, (PAD, PAD))
-    _imgcache[key] = img
+    _bgcache[key] = img
+    return img
+
+
+def _card_rgba(item, hover=None):
+    """카드 한 장. 바탕은 캐시에서 가져오고 글자는 이 알림의 것으로 새로 그린다."""
+    from PIL import ImageDraw
+
+    # 완료 처리할 대상이 없는 알림(브리핑·요약)은 버튼이 "확인" 이다.
+    # "완료" 라고 적어두면 무엇이 완료되는지 알 수 없다.
+    btn_label = "완료" if item.get("on_done") else "확인"
+    img = _card_bg(item["accent"], hover, btn_label).copy()
+    d = ImageDraw.Draw(img)
+    f_title = _font(FONTS_BD, TITLE_PX)
+    f_sub = _font(FONTS, SUB_PX)
+
+    lines = _wrap(item["title"], f_title, TW)
+    y = PAD + TY
+    for ln in lines:
+        d.text((PAD + TX, y), ln, font=f_title, fill=_rgb(TEXT) + (255,))
+        y += LINE_H
+    if item.get("sub"):
+        d.text((PAD + TX, y + 4), _fit(item["sub"], f_sub, TW), font=f_sub,
+               fill=_rgb(MUTED) + (255,))
     return img
 
 
@@ -328,7 +404,8 @@ class Card(tk.Toplevel):
 
         self.born = time.time()
         self._closing = False
-        self.after(LIFE_MS, self.close)
+        self._over = False
+        self.after(LIFE_MS, self._expire)
 
     # --- 폴백: 캔버스로 직접 그리기 ---
     def _build_canvas(self, item):
@@ -379,6 +456,7 @@ class Card(tk.Toplevel):
             self.close()
 
     def _motion(self, e):
+        self._over = True
         t = self._hit(e.x, e.y)
         if t == self.hover:
             return
@@ -397,6 +475,7 @@ class Card(tk.Toplevel):
             self._paint_canvas_hover(t)
 
     def _leave(self, e):
+        self._over = False
         if self.hover is not None:
             self.hover = None
             try:
@@ -479,6 +558,13 @@ class Card(tk.Toplevel):
             return
         self.after(16, lambda: self.fade(target, step))
 
+    def _expire(self):
+        """수명이 끝났다. 읽고 있는 중이면(마우스가 위에 있으면) 조금 기다린다."""
+        if self._over and time.time() - self.born < HOLD_MAX:
+            self.after(1000, self._expire)
+            return
+        self.close()
+
     def close(self):
         if self._closing or self not in _live:
             return
@@ -495,14 +581,29 @@ class Card(tk.Toplevel):
         _layout()
 
 
+class _RECT(ctypes.Structure):
+    _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+
+def _work_area():
+    """작업표시줄을 뺀 화면 영역. 화면 크기로 계산하면 카드가 작업표시줄에 가린다."""
+    try:
+        r = _RECT()
+        if U32.SystemParametersInfoW(0x0030, 0, ctypes.byref(r), 0):   # SPI_GETWORKAREA
+            return r.left, r.top, r.right, r.bottom
+    except Exception:
+        pass
+    return 0, 0, _root.winfo_screenwidth(), _root.winfo_screenheight()
+
+
 def _layout():
-    sw = _root.winfo_screenwidth()
-    sh = _root.winfo_screenheight()
+    _, _, sw, sh = _work_area()
     for n, card in enumerate(reversed(_live)):
         pad = PAD if card.layered else 0
         w = W if card.layered else CW
         try:
-            card.place(sw - w - 24 + pad, sh - 76 - (n + 1) * (CH + GAP) - pad)
+            card.place(sw - w - 20 + pad, sh - 12 - (n + 1) * (CH + GAP) - pad)
         except Exception:
             paths.log("toast: " + traceback.format_exc())
 

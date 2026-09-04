@@ -12,6 +12,7 @@ BASE = paths.APP_DIR
 WEB = paths.WEB_DIR
 HOST, PORT = "127.0.0.1", 8777
 UI_PORT = 8779                  # 창 프로세스(ui.py) 가 듣는 포트
+LATE_GRACE = 90                 # 마감이 지난 뒤에도 이 분 안에는 알린다
 CRLF = bytes([13, 10])
 URL = f"http://{HOST}:{PORT}/"
 NO_WINDOW = 0x08000000
@@ -154,6 +155,8 @@ class Handler(BaseHTTPRequestHandler):
             o = store.overview()
             o["settings"] = dict(o.get("settings", {}), autostart=autostart.is_enabled())
             return self._send(200, o)
+        if p == "/api/notify-plan":
+            return self._send(200, notify_plan())
         if p == "/api/ping":
             return self._send(200, {"ok": True})
         if p == "/api/open":
@@ -233,11 +236,15 @@ def _mark(key):
 
 
 def scheduler():
+    fails = 0
     while True:
         try:
             tick()
+            fails = 0
         except Exception:
-            pass
+            # 예전에는 여기서 그냥 넘어갔다. 알림이 왜 안 뜨는지 알 방법이 없었다.
+            fails += 1
+            log("scheduler tick 실패 (%d회째)" % fails + chr(10) + traceback.format_exc())
         time.sleep(20)
 
 
@@ -276,26 +283,107 @@ def tick():
                          (head[0]["title"] if head else "") + tail, accent="#85bdb3",
                          key=f"brief:{now.date()}")
 
+    missed = []
     for i in store.instances(back=1, ahead=1, data=d):
-        if i["done"] or not i["due"] or i.get("muted"):
-            continue
-        due = datetime.fromisoformat(i["due"])
-        lead = timedelta(minutes=i["notify_min"]) if i["notify_min"] is not None else default_lead
-        if not (due - lead <= now <= due + timedelta(minutes=90)):
-            continue
-        key = f"{i['id']}:{i['date']}:{i['time']}"
-        mins = int((due - now).total_seconds() // 60)
-        if first_tick and mins <= 0:
-            # 프로그램을 켠 첫 순간에 이미 지나간 마감까지 한꺼번에 띄우면
-            # 카드가 무더기로 겹쳐 뜬다. 표시만 해두고 넘어간다.
-            _mark(key)
-            continue
-        if _mark(key):
-            sub = f"{mins}분 뒤 마감 · {i['time']}" if mins > 0 else f"마감 시간 지남 · {i['time']}"
-            tid, day = i["id"], i["date"]
-            toast.notify(i["title"], sub, accent="#08202b" if mins <= 0 else "#4d7572",
+        # 항목 하나에서 터져도 나머지 알림은 계속 떠야 한다
+        try:
+            if _maybe_notify(i, now, default_lead, first_tick) == "missed":
+                missed.append(i)
+        except Exception:
+            log("알림 처리 실패 (%s)" % i.get("id") + chr(10) + traceback.format_exc())
+
+    # 프로그램을 늦게 켰을 때: 지나간 알림을 한 장으로 모아 보여준다.
+    # 예전에는 조용히 버려서 "오늘 알림이 안 떴다" 가 됐고, 그렇다고 다 띄우면
+    # 카드가 무더기로 겹쳐 떴다.
+    if missed:
+        missed.sort(key=lambda x: (x["date"], x["time"]))
+        head = missed[0]
+        if len(missed) == 1:
+            tid, day = head["id"], head["date"]
+            toast.notify(head["title"], "마감 시간 지남 · %s" % head["time"],
+                         accent="#08202b",
                          on_done=lambda tid=tid, day=day: store.toggle_done(tid, day),
-                         key=f"{tid}:{day}")
+                         key="missed:%s:%s" % (tid, day))
+        else:
+            toast.notify("놓친 알림 %d건" % len(missed),
+                         "%s · %s 외 %d건" % (head["time"], head["title"],
+                                                  len(missed) - 1),
+                         accent="#08202b", key="missed:%s" % now.date())
+        log("놓친 알림 %d건을 한 장으로 알림" % len(missed))
+
+
+def _plan(i, now, default_lead):
+    """이 항목의 알림 계획. (알림 시각, 마감 시각, 건너뛸 이유) 를 돌려준다.
+
+    점검할 때 이 함수만 보면 "왜 안 떴는지" 를 알 수 있다.
+    """
+    if not i["due"]:
+        return None, None, "마감 시각 없음"
+    due = datetime.fromisoformat(i["due"])
+    lead = timedelta(minutes=i["notify_min"]) if i["notify_min"] is not None else default_lead
+    at = due - lead
+    if i["done"]:
+        return at, due, "이미 완료"
+    if i.get("muted"):
+        return at, due, "알림 끔"
+    if now < at:
+        return at, due, "아직 이르다"
+    if now > due + timedelta(minutes=LATE_GRACE):
+        return at, due, "시간이 너무 지났다"
+    return at, due, None
+
+
+def _maybe_notify(i, now, default_lead, first_tick):
+    at, due, skip = _plan(i, now, default_lead)
+    if skip:
+        return
+    key = "%s:%s:%s" % (i["id"], i["date"], i["time"])
+    mins = int((due - now).total_seconds() // 60)
+    if first_tick and mins <= 0:
+        # 프로그램을 켠 첫 순간에 지나간 것들은 각각 띄우지 않고 모아서 한 장으로
+        # 보여준다 (tick 의 missed 처리). 여기서는 표시만 해둔다.
+        _mark(key)
+        return "missed"
+    if not _mark(key):
+        return
+    sub = ("%d분 뒤 마감 · %s" % (mins, i["time"])) if mins > 0 else           ("마감 시간 지남 · %s" % i["time"])
+    tid, day = i["id"], i["date"]
+    toast.notify(i["title"], sub, accent="#08202b" if mins <= 0 else "#4d7572",
+                 on_done=lambda tid=tid, day=day: store.toggle_done(tid, day),
+                 key="%s:%s" % (tid, day))
+    log("알림 띄움: %s (%s)" % (key, sub))
+
+
+
+def notify_plan():
+    """알림 점검용. 어제~내일의 각 회차가 언제 알려질 예정인지, 안 알려지면 왜인지.
+
+    "왜 안 떴지" 를 추측하지 않고 확인할 수 있어야 한다.
+    """
+    now = datetime.now()
+    d = store.load()
+    default_lead = timedelta(minutes=int(d.get("settings", {}).get("notify_min", 30)))
+    fired = set(d.get("fired", []))
+    out = []
+    for i in store.instances(back=1, ahead=1, data=d):
+        at, due, skip = _plan(i, now, default_lead)
+        key = "%s:%s:%s" % (i["id"], i["date"], i["time"])
+        out.append({
+            "title": i["title"],
+            "date": i["date"],
+            "time": i["time"],
+            "kind": i["kind"],
+            "notify_at": at.strftime("%m-%d %H:%M") if at else "",
+            "due_at": due.strftime("%m-%d %H:%M") if due else "",
+            "already_fired": key in fired,
+            "skip": skip or "",
+            "will_notify": bool(not skip and key not in fired),
+        })
+    out.sort(key=lambda r: (r["notify_at"] or "9"))
+    return {"now": now.strftime("%m-%d %H:%M"),
+            "default_lead_min": int(default_lead.total_seconds() // 60),
+            "rows": out}
+
 
 
 def main():
