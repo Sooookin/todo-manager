@@ -88,9 +88,10 @@ input,textarea{user-select:text}
    내용에 따라 늘어나서, fitCards 가 재는 칼럼 높이가 카드 내용에 좌우된다. */
 .grid{flex:1; display:grid; grid-template-columns:1.1fr 1fr;
   grid-template-rows:minmax(0,1fr); gap:18px; min-height:0}
-.col{position:relative; display:flex; flex-direction:column; gap:18px;
-  min-height:0; overflow:hidden}
-.card{background:var(--card); border-radius:20px; padding:16px 18px 13px; display:flex;
+/* overflow:hidden 을 걸면 카드의 부드러운 그림자가 칼럼 경계에서 직선으로
+   잘려 코너에 밝은 띠가 생긴다. 행 높이는 grid-template-rows 로 이미 고정했다. */
+.col{position:relative; display:flex; flex-direction:column; gap:14px; min-height:0}
+.card{background:var(--card); border-radius:20px; padding:14px 18px 11px; display:flex;
   flex-direction:column; min-height:0; flex:1;
   box-shadow:7px 7px 16px var(--dark), -7px -7px 16px var(--light)}
 /* 오른쪽 칸 높이는 app.js 의 fitCards() 가 한 줄 높이의 정수배로 정한다.
@@ -98,7 +99,7 @@ input,textarea{user-select:text}
 .card.f06{flex:.6}
 #col-right > .card{flex:0 0 auto}
 #col-right > .card.fold{margin-top:auto}   /* 남는 공간은 위에 두고 아래에 붙인다 */
-.card h2{margin:1px 2px 12px; font-size:12px; letter-spacing:.5px; color:var(--ink2);
+.card h2{margin:1px 2px 9px; font-size:12px; letter-spacing:.5px; color:var(--ink2);
   font-weight:700; display:flex; align-items:center; gap:8px}
 .h-note{font-style:normal; font-size:10.5px; color:var(--faint); font-weight:500; margin-left:auto}
 .badge{background:var(--bg); color:var(--faint); font-size:10.5px; padding:2px 8px; border-radius:9px;
@@ -115,7 +116,7 @@ input,textarea{user-select:text}
 .card.fold .list{display:none}
 .card.fold.open{position:absolute; inset:0; flex:none; z-index:4; padding-bottom:13px;
   box-shadow:11px 11px 26px var(--dark), -11px -11px 26px var(--light)}
-.card.fold.open h2{margin-bottom:12px}
+.card.fold.open h2{margin-bottom:9px}
 .card.fold.open .list{display:flex}
 .caret{font-style:normal; font-size:10px; color:var(--mid); margin-left:auto;
   transition:transform .2s; display:inline-block; line-height:1}
@@ -263,6 +264,19 @@ input,textarea{user-select:text}
 #m-day.on{display:flex}
 #m-day .mg-list{flex:0 1 auto; min-height:0; margin-top:0}
 #m-day .btns{position:static; background:none; margin-top:14px}
+
+/* 하루 목록 한 줄: 동그라미로 바로 완료, 연필로 수정 */
+.day-row{gap:10px}
+.day-row .dot{width:20px; height:20px; border-radius:50%; flex:0 0 auto; position:relative;
+  cursor:pointer; background:var(--card);
+  box-shadow:inset 3px 3px 6px var(--dark), inset -3px -3px 6px var(--light)}
+.day-row .dot:hover::after{content:""; position:absolute; inset:6px; border-radius:50%;
+  background:var(--faint)}
+.day-row.off .dot::after{content:""; position:absolute; inset:5px; border-radius:50%;
+  background:var(--mint)}
+.day-row.off .n{text-decoration:line-through}
+.day-row .note{flex:0 1 auto; min-width:0; font-size:11px; color:var(--faint);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 
 /* ---------- 모달 ---------- */
 .veil{position:fixed; inset:0; background:rgba(178,192,190,.55); backdrop-filter:blur(3px);

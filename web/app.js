@@ -158,7 +158,8 @@ function render(o){
    flex 비율(1 / .6 / auto)로 나누면 항목 3개일 때 공백이 남고 4개일 때 넘쳐
    스크롤이 생겼다. 한 줄 높이를 실제로 재서, 칸 높이를 그 정수배로만 준다.
    자리가 모자라면 줄이 가장 많은 칸부터 한 줄씩 줄인다 (그 칸만 스크롤). */
-const COL_GAP = 18;
+const COL_GAP = 14;          /* .col 의 gap 과 같아야 한다 */
+const MIN_ROWS = 4;          /* 다가오는 마감·메모는 네 줄 자리를 잡아 둔다 */
 
 function fitCards(){
   const col = $('#col-right');
@@ -191,29 +192,33 @@ function fitCards(){
   const cardH = (o, n) => o.chrome + listH(o, n);
 
   const avail = col.clientHeight - COL_GAP * (cards.length - 1);
-  const show = info.map(o => o.rows);
-  const total = () => info.reduce((sum, o, k) => sum + cardH(o, show[k]), 0);
 
-  /* 자리가 모자라면 아래쪽 칸(우선순위가 낮은 쪽)부터 줄인다.
-     중요도는 오늘 > 다가오는 마감 > 메모 > 반복 업무 순이므로, 마감을 남기고
-     메모를 먼저 접는 게 맞다. 다만 두 줄은 남겨 둔다 - 한 줄만 보이면
-     "더 있다" 는 것조차 알기 어렵다. */
-  const FLOOR = 2;
-  for(let guard = 0; guard < 400 && total() > avail; guard++){
-    let k = -1;
-    for(let j = show.length - 1; j >= 0; j--)
-      if(show[j] > Math.min(info[j].rows, FLOOR)){ k = j; break; }
-    if(k < 0){                                  /* 다 바닥이면 많은 쪽부터 */
-      k = 0;
-      for(let j = 1; j < show.length; j++) if(show[j] > show[k]) k = j;
-      if(show[k] <= 1) break;
+  /* 칸 높이는 "보여줄 줄 수" 와 "잡아 둘 줄 수(min)" 중 큰 쪽으로 정한다.
+     항목이 두 개뿐이어도 네 줄 자리를 남겨 두면, 항목이 늘 때 배치가 흔들리지
+     않고 칼럼 아래에 큰 빈 공간이 남지도 않는다. */
+  let show = [], min = MIN_ROWS;
+  const slot = k => info[k].open ? Math.max(show[k], min) : 0;
+  const total = () => info.reduce((sum, o, k) => sum + cardH(o, slot(k)), 0);
+
+  for(;;){
+    show = info.map(o => o.rows);
+    /* 자리가 모자라면 아래쪽 칸(우선순위가 낮은 쪽)부터 줄인다.
+       중요도가 오늘 > 다가오는 마감 > 메모 > 반복 업무 순이므로,
+       마감을 남기고 메모를 먼저 접는 게 맞다. */
+    for(let guard = 0; guard < 400 && total() > avail; guard++){
+      let k = -1;
+      for(let j = show.length - 1; j >= 0; j--)
+        if(info[j].open && show[j] > min){ k = j; break; }
+      if(k < 0) break;
+      show[k]--;
     }
-    show[k]--;
+    if(total() <= avail || min <= 1) break;
+    min--;                        /* 창이 정말 좁으면 잡아 두는 줄 수를 줄인다 */
   }
 
   info.forEach((o, k) => {
-    if(o.open) o.list.style.height = listH(o, show[k]) + 'px';
-    o.c.style.height = cardH(o, show[k]) + 'px';
+    if(o.open) o.list.style.height = listH(o, slot(k)) + 'px';
+    o.c.style.height = cardH(o, slot(k)) + 'px';
   });
 }
 /* render() 직후에는 아직 배치가 끝나지 않아 칼럼 높이를 잘못 잰다.
@@ -613,15 +618,32 @@ function dayModal(key, list){
     (wknd ? ' · 주말 마감 ' + wknd + '건 포함' : '') + '</i>';
   const box = $('#day-list');
   box.innerHTML = '';
+  if(!list.length){
+    box.innerHTML = '<div class="empty">이 날짜에 마감이 없습니다</div>';
+  }
   list.forEach(t => {
     const el = document.createElement('div');
-    el.className = 'mg-row' + (t.done ? ' off' : '');
+    el.className = 'mg-row day-row' + (t.done ? ' off' : '');
     const d = dObj(t.due_date);
     const when = (isWeekend(t.due_date)
         ? d.getDate() + '일(' + WD[(d.getDay() + 6) % 7] + ') ' : '') +
       (t.due_time || (isWeekend(t.due_date) ? '' : '시각 없음'));
-    el.innerHTML = '<span class="k">마감</span><span class="n">' + esc(t.title) +
-                   '</span><span class="w">' + esc(when.trim()) + '</span>';
+    el.innerHTML = '<span class="dot" title="완료"></span>' +
+                   '<span class="n">' + esc(t.title) + '</span>' +
+                   (t.note ? '<span class="note">' + esc(t.note) + '</span>' : '') +
+                   '<span class="w">' + esc(when.trim()) + '</span>' +
+                   '<button class="rowbtn" title="수정 / 삭제">✎</button>';
+    el.querySelector('.dot').onclick = e => {
+      e.stopPropagation();
+      api('/api/task/' + t.id + '/toggle', {date: t.due_date})
+        .then(() => api('/api/overview')).then(o => {
+          render(o);
+          const fresh = deadlines().filter(x => cellDate(x.due_date) === key);
+          dayModal(key, fresh.sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0) ||
+            a.due_date.localeCompare(b.due_date) ||
+            (a.due_time || '99:99').localeCompare(b.due_time || '99:99')));
+        });
+    };
     el.onclick = () => { closeM('#m-day'); openEdit(asItem(t)); };
     box.appendChild(el);
   });
@@ -702,11 +724,14 @@ function drawCal(){
           more.onclick = e => { e.stopPropagation(); dayModal(key, list); };
           cell.appendChild(more);
         }
-        cell.onclick = () => list.length > CAL_MAX ? dayModal(key, list)
-                                                   : openAdd('deadline', {date:key});
-        cell.title = hol ? (HN[key] || '공휴일') + ' · 영업일이 아닙니다'
-                         : we ? '주말 · 영업일이 아닙니다'
-                              : '눌러서 이 날짜에 마감 추가';
+        /* 마감이 있는 날은 그날 목록을, 빈 날은 추가 창을 연다 */
+        cell.onclick = () => list.length ? dayModal(key, list)
+                                         : openAdd('deadline', {date:key});
+        const kind = hol ? (HN[key] || '공휴일') + ' · 영업일 아님'
+                         : we ? '주말 · 영업일 아님' : '';
+        cell.title = (kind ? kind + String.fromCharCode(10) : '') +
+                     (list.length ? '마감 ' + list.length + '건 - 눌러서 전체 보기'
+                                  : '눌러서 이 날짜에 마감 추가');
       }
       grid.appendChild(cell);
     }
