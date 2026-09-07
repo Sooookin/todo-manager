@@ -11,6 +11,7 @@ BASE = paths.APP_DIR
 HOST, SERVICE_PORT = "127.0.0.1", 8777
 SERVICE_URL = f"http://{HOST}:{SERVICE_PORT}/"
 UI_PORT = 8779          # 창 단일 실행 + 포커스 요청용
+CRLF = bytes([13, 10])
 
 
 class Api:
@@ -80,10 +81,21 @@ def hwnd():
     return _hwnd_cache
 
 
+def _tell_hidden():
+    """서비스에 "창을 숨겼다" 고 알린다 (안내 카드를 한 번 띄우게)."""
+    try:
+        with socket.create_connection((HOST, SERVICE_PORT), 1.0) as sock:
+            sock.sendall(b"GET /api/hidden HTTP/1.0" + CRLF + CRLF)
+            sock.recv(32)
+    except OSError:
+        pass
+
+
 def hide():
     h = hwnd()
     if h:
         _U.ShowWindow(h, SW_HIDE)
+        threading.Thread(target=_tell_hidden, daemon=True).start()
 
 
 def focus():
@@ -192,8 +204,15 @@ def main():
     )
     if "--hidden" not in sys.argv:
         # 부모 프로세스의 표시 상태가 딸려와 최소화된 채로 뜨는 때가 있다.
-        # 창이 만들어진 뒤 한 번 앞으로 불러온다.
-        threading.Timer(1.5, focus).start()
+        # 창이 만들어진 뒤 한 번 앞으로 불러온다. 창이 생기는 시점이 일정하지
+        # 않으므로 잠깐 기다려 준다 (예전엔 너무 일찍 불러 로그만 남았다).
+        def _first_focus():
+            for _ in range(20):
+                if hwnd():
+                    focus()
+                    return
+                time.sleep(0.25)
+        threading.Thread(target=_first_focus, daemon=True).start()
 
     icon = paths.ICON
     try:

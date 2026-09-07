@@ -36,6 +36,7 @@ TX, TY = 42, 25
 TW = CW - TX - 44
 TITLE_PX, SUB_PX = 13, 11             # 예전 15/12 는 글자가 커서 제목이 잘렸다
 LINE_H = 18
+SUB_LINE_H = 15
 TITLE_LINES = 2
 
 FONTS = [r"C:\Windows\Fonts\malgun.ttf", r"C:\Windows\Fonts\NotoSansKR-VF.ttf"]
@@ -147,16 +148,6 @@ def _wrap(text, font, width, max_lines=TITLE_LINES):
     return lines
 
 
-def _fit(text, font, width):
-    """한 줄에 맞게 자른다 (부제목용)."""
-    text = " ".join((text or "").split())
-    if font.getlength(text) <= width:
-        return text
-    while text and font.getlength(text + "\u2026") > width:
-        text = text[:-1]
-    return text + "\u2026"
-
-
 # 그림자·버튼·✕ 는 그리는 비용이 크고 내용과 무관하므로 여기 담아 둔다.
 # 글자는 절대 담지 않는다 - 예전에는 카드 전체를 (accent, hover) 로만 담아서,
 # 같은 색의 두 번째 알림이 첫 번째 알림의 글자를 그대로 다시 띄웠다.
@@ -249,9 +240,12 @@ def _card_rgba(item, hover=None):
     for ln in lines:
         d.text((PAD + TX, y), ln, font=f_title, fill=_rgb(TEXT) + (255,))
         y += LINE_H
+    # 부제목도 두 줄까지 쓴다. 한 줄로 자르면 "왜 떴는지" 가 잘려 나간다.
     if item.get("sub"):
-        d.text((PAD + TX, y + 4), _fit(item["sub"], f_sub, TW), font=f_sub,
-               fill=_rgb(MUTED) + (255,))
+        y += 4
+        for ln in _wrap(item["sub"], f_sub, TW, 2):
+            d.text((PAD + TX, y), ln, font=f_sub, fill=_rgb(MUTED) + (255,))
+            y += SUB_LINE_H
     return img
 
 

@@ -33,8 +33,15 @@ READ_ME = r"""To-Do Manager  -  일정 · 루틴 관리
 
 ■ 기억할 것 하나
   창의 X 는 창만 닫습니다. 프로그램은 뒤에서 계속 돌며 알림을 띄웁니다.
-  다시 열려면 작업표시줄 오른쪽 알림영역(^) 의 체크 아이콘을 클릭하세요.
-  완전히 끄려면 그 아이콘 우클릭 -> "완전히 종료".
+  (닫을 때 안내 카드가 한 번 떠오릅니다)
+
+  다시 열기   바탕화면 아이콘을 누르면 1초 안에 다시 열립니다.
+              작업표시줄 알림영역의 체크 아이콘을 눌러도 됩니다.
+  완전히 끄기 그 아이콘 우클릭 -> "완전히 종료"
+
+  * Windows 11 은 새 알림영역 아이콘을 기본으로 숨깁니다. 안 보이면
+    작업표시줄 오른쪽의 ^ 를 누르면 있습니다. 항상 보이게 하려면
+    ^ 를 눌러 나온 아이콘을 작업표시줄로 끌어다 놓으세요.
 
 ■ 항목 추가   [+ 새 항목]
   · 반복되는 일
@@ -226,8 +233,10 @@ def main():
               "poplib", "smtplib", "turtle", "turtledemo", "idlelib",
               # unicodedata 는 빼면 안 된다 - bottle 이 쓰고, bottle 이 죽으면
               # pywebview 가 통째로 못 올라온다 (--selftest 로 확인)
-              "ensurepip", "venv", "zoneinfo",
-              "decimal", "_decimal", "bz2", "_bz2", "lzma", "_lzma"):
+              # decimal·bz2·lzma 도 빼면 안 된다. decimal 을 뺐더니
+              # PIL.PngImagePlugin 이 못 올라와서 PNG·ICO 를 읽지 못했고,
+              # 그 결과 트레이 아이콘이 조용히 사라졌다 (--selftest 가 잡아 줬다)
+              "ensurepip", "venv", "zoneinfo"):
         args += ["--exclude-module", m]
     args += extra_binaries()
     args.append("main.py")

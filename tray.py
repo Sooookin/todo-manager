@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """작업표시줄 알림영역(트레이) 아이콘. 창을 닫아도 여기서 바로 다시 열 수 있다."""
-import os, threading
+import os, threading, traceback
 
 import paths
 
@@ -53,12 +53,17 @@ def _quit(cb):
 
 
 def start(on_open, on_test, on_quit, subtitle=lambda: "To-Do Manager"):
-    """트레이 아이콘을 별도 스레드에서 띄운다. 실패하면 조용히 넘어간다."""
+    """트레이 아이콘을 별도 스레드에서 띄운다.
+
+    실패를 조용히 넘기면 안 된다. 아이콘이 없으면 창을 닫았을 때 프로그램이
+    살아 있다는 표시가 아무것도 남지 않아서 "그냥 꺼졌다" 로 보인다.
+    """
     global _icon
     try:
         import pystray
         from pystray import MenuItem as Item
     except Exception:
+        paths.log("tray: pystray 임포트 실패" + chr(10) + traceback.format_exc())
         return None
 
     menu = pystray.Menu(
@@ -71,9 +76,23 @@ def start(on_open, on_test, on_quit, subtitle=lambda: "To-Do Manager"):
     try:
         _icon = pystray.Icon("todomanager", _image(), "To-Do Manager", menu)
     except Exception:
+        paths.log("tray: 아이콘 생성 실패" + chr(10) + traceback.format_exc())
         return None
-    threading.Thread(target=_icon.run, daemon=True).start()
+
+    def _run():
+        try:
+            _icon.run()
+        except Exception:
+            # 스레드에서 터지면 빌드본은 stderr 가 없어 흔적도 없이 사라진다
+            paths.log("tray: run 실패" + chr(10) + traceback.format_exc())
+
+    threading.Thread(target=_run, daemon=True).start()
     return _icon
+
+
+def available():
+    """알림영역 아이콘이 실제로 올라왔는지."""
+    return _icon is not None
 
 
 def set_title(text):

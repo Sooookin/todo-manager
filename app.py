@@ -111,6 +111,26 @@ def open_window():
     webbrowser.open(URL)
 
 
+_hinted = False
+
+
+def _hint_hidden():
+    """창을 닫았을 때 한 번만: 프로그램이 살아 있다는 것을 알려 준다.
+
+    Windows 11 은 새 알림영역 아이콘을 기본으로 숨긴다(^ 안쪽). 그래서 창을
+    닫으면 살아 있다는 표시가 화면에 하나도 남지 않아 "그냥 꺼졌다" 로 보인다.
+    """
+    global _hinted
+    if _hinted:
+        return
+    _hinted = True
+    where = ("알림은 계속 동작합니다. 작업표시줄 알림영역(^ 안쪽)의 체크 아이콘이나 "
+             "바탕화면 아이콘으로 다시 열 수 있어요."
+             if tray.available()
+             else "알림은 계속 동작합니다. 바탕화면 아이콘으로 다시 열 수 있어요.")
+    toast.notify("창만 닫았습니다", where, accent="#85bdb3", key="hint:hidden")
+
+
 def close_ui():
     """창 프로세스에 종료를 알린다. 창이 없으면 그냥 넘어간다."""
     try:
@@ -157,6 +177,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, o)
         if p == "/api/notify-plan":
             return self._send(200, notify_plan())
+        if p == "/api/hidden":
+            _hint_hidden()
+            return self._send(200, {"ok": True})
         if p == "/api/ping":
             return self._send(200, {"ok": True})
         if p == "/api/open":

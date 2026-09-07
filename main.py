@@ -98,6 +98,30 @@ def selftest():
     except Exception:
         lines.append("  " + traceback.format_exc().replace("\n", "\n  "))
 
+    lines += ["", "[그림 읽기 점검] 트레이 아이콘이 여기서 막힌 적이 있다"]
+    try:
+        from PIL import Image
+        Image.preinit()
+        Image.init()
+        lines.append("  등록된 형식 %d개: %s" % (len(set(Image.ID)),
+                                             ", ".join(sorted(set(Image.ID)))))
+        for mod in ("zlib", "PIL._imaging", "PIL.PngImagePlugin",
+                    "PIL.IcoImagePlugin", "PIL.BmpImagePlugin"):
+            try:
+                __import__(mod)
+                lines.append("  OK    " + mod)
+            except Exception as e:
+                lines.append("  실패  %s: %s: %s" % (mod, type(e).__name__, e))
+        for f in (paths.ICON, os.path.join(paths.WEB_DIR, "icon-16.png")):
+            try:
+                with Image.open(f) as im:
+                    lines.append("  OK    %s %s" % (os.path.basename(f), im.size))
+            except Exception as e:
+                lines.append("  실패  %s: %s: %s" % (os.path.basename(f),
+                                                    type(e).__name__, e))
+    except Exception:
+        lines.append("  " + traceback.format_exc().replace(chr(10), chr(10) + "  "))
+
     lines += ["", "[알림 점검] 어제~내일의 각 회차가 언제 알려지는지"]
     try:
         import app
