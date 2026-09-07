@@ -10,7 +10,13 @@ paths.migrate_legacy()
 DATA = paths.DATA_FILE
 LOCK = threading.RLock()
 
-_DEFAULT = {"tasks": [], "fired": [], "holidays": [], "settings": {"notify_min": 30, "brief_time": "08:30", "business_only": True}}
+_SETTINGS = {
+    "notify_min": 30,
+    "brief_time": "08:30",
+    "business_only": True,
+    "show_weekend": True,          # 달력에 주말 칸을 보여줄지
+}
+_DEFAULT = {"tasks": [], "fired": [], "holidays": [], "settings": dict(_SETTINGS)}
 
 
 def _read():
@@ -23,6 +29,10 @@ def _read():
         return json.loads(json.dumps(_DEFAULT))
     for k, v in _DEFAULT.items():
         d.setdefault(k, json.loads(json.dumps(v)))
+    # settings 는 통째로 있으므로 setdefault 로는 새 항목이 채워지지 않는다.
+    # 나중에 설정을 추가해도 예전 데이터에서 동작하도록 낱개로 채운다.
+    for k, v in _SETTINGS.items():
+        d["settings"].setdefault(k, v)
     return d
 
 

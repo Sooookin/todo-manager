@@ -50,12 +50,12 @@
         <div class="list" id="today"></div>
       </div>
     </section>
-    <section class="col">
-      <div class="card">
+    <section class="col" id="col-right">
+      <div class="card" id="card-up">
         <h2>다가오는 마감 <span class="badge" id="c-up">0</span><i class="h-note">7일</i></h2>
         <div class="list" id="upcoming"></div>
       </div>
-      <div class="card f06">
+      <div class="card" id="card-memo">
         <h2>메모 <span class="badge" id="c-float">0</span></h2>
         <div class="list" id="floating"></div>
       </div>
@@ -72,6 +72,7 @@
       <b class="cal-ym" id="cal-ym">—</b>
       <button class="cbtn" id="cal-next" title="다음 달">›</button>
       <button class="link" id="cal-now">이번 달</button>
+      <button class="cbtn wide" id="cal-we" title="주말 칸 표시 / 숨김">주말</button>
       <div class="cal-gap"></div>
       <span class="cal-legend">
         <i class="sw p"></i>지남
@@ -81,9 +82,7 @@
       </span>
       <i class="h-note" id="cal-note"></i>
     </div>
-    <div class="cal-head">
-      <span>월</span><span>화</span><span>수</span><span>목</span><span>금</span>
-    </div>
+    <div class="cal-head" id="cal-head"></div>
     <div class="cal-grid" id="cal-grid"></div>
   </section>
 

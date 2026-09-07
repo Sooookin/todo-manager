@@ -78,14 +78,18 @@ function itemEl(i, opt){
   }
   if(i.kind === 'routine') bits.push('<span title="'+esc(i.rule_text)+'">↻</span>');
   if(i.muted) bits.push('<span>알림 끔</span>');
-  if(i.note) bits.push('<span>· '+esc(i.note.slice(0,22))+'</span>');
+  /* 한 줄: 제목은 늘어나고 마감 정보는 오른쪽에 붙는다.
+     두 줄이면 한 화면에 절반밖에 안 들어간다. */
   el.innerHTML = '<div class="dot" title="완료"></div>'+
-    '<div class="body"><div class="t">'+esc(i.title)+'</div>'+
-    (bits.length ? '<div class="meta">'+bits.join('')+'</div>' : '')+'</div>'+
+    '<div class="t">'+esc(i.title)+'</div>'+
+    (bits.length ? '<div class="meta">'+bits.join('')+'</div>' : '')+
     '<button class="rowbtn" title="수정 / 삭제">✎</button>';
-  el.querySelector('.dot').onclick = () => api('/api/task/'+i.id+'/toggle', {date:i.date}).then(load);
-  el.querySelector('.body').onclick = () => openEdit(i);
-  el.querySelector('.rowbtn').onclick = () => openEdit(i);
+  el.title = i.title + (i.note ? String.fromCharCode(10) + i.note : '');
+  el.querySelector('.dot').onclick = e => {
+    e.stopPropagation();
+    api('/api/task/'+i.id+'/toggle', {date:i.date}).then(load);
+  };
+  el.onclick = () => openEdit(i);
   return el;
 }
 
@@ -95,14 +99,13 @@ function routineEl(i){
   const isToday = i.next_date === STATE.today;
   el.className = 'item rt k-routine' + (isToday ? (i.done ? ' cleared' : ' today') : '');
   const when = i.next_date ? fmtDay(i.next_date) + (i.time ? ' '+i.time : '') : '예정 없음';
-  el.innerHTML = '<div class="body"><div class="t">'+esc(i.title)+'</div>'+
-    '<div class="meta"><span class="pill">↻ '+esc(i.rule_text)+'</span>'+
-    (i.muted ? '<span class="pill">알림 끔</span>' : '')+
-    (isToday && i.done ? '<span>오늘 완료</span>' : '')+'</div></div>'+
+  el.innerHTML = '<div class="t">'+esc(i.title)+'</div>'+
+    '<span class="rule" title="'+esc(i.rule_text)+'">↻ '+esc(i.rule_text)+'</span>'+
+    (i.muted ? '<span class="tag">알림 끔</span>' : '')+
     '<span class="when">'+when+'</span>'+
     '<button class="rowbtn" title="수정 / 삭제">✎</button>';
-  el.querySelector('.body').onclick = () => openEdit(i);
-  el.querySelector('.rowbtn').onclick = () => openEdit(i);
+  el.title = i.title + ' · ' + i.rule_text + (isToday && i.done ? ' (오늘 완료)' : '');
+  el.onclick = () => openEdit(i);
   return el;
 }
 
@@ -148,7 +151,81 @@ function render(o){
   $('#s-auto').checked = !!o.settings.autostart;
   if($('#m-manage').classList.contains('on')) drawManage();
   if(view === 'cal') drawCal();
+  queueFit();
 }
+
+/* ══════════ 오른쪽 칸 높이 맞추기 ══════════
+   flex 비율(1 / .6 / auto)로 나누면 항목 3개일 때 공백이 남고 4개일 때 넘쳐
+   스크롤이 생겼다. 한 줄 높이를 실제로 재서, 칸 높이를 그 정수배로만 준다.
+   자리가 모자라면 줄이 가장 많은 칸부터 한 줄씩 줄인다 (그 칸만 스크롤). */
+const COL_GAP = 18;
+
+function fitCards(){
+  const col = $('#col-right');
+  if(!col || $('#v-home').hidden) return;
+  const cards = [...col.querySelectorAll('.card')];
+  /* 반복 업무 칸이 펼쳐지면 칼럼 전체를 덮으므로(position:absolute) 건드리지 않는다 */
+  if(!cards.length || cards.some(c => c.classList.contains('open'))) return;
+
+  const info = cards.map(c => {
+    const list = c.querySelector('.list');
+    c.style.height = 'auto';
+    if(list) list.style.height = 'auto';
+    const open = list && getComputedStyle(list).display !== 'none';
+    const cs = open ? getComputedStyle(list) : null;
+    const first = open ? list.firstElementChild : null;
+    return {
+      c: c, list: list, open: open,
+      pad: open ? parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom) : 0,
+      gap: open ? (parseFloat(cs.rowGap) || 0) : 0,
+      rows: open ? list.children.length : 0,
+      rowH: first ? first.offsetHeight : 0,
+      /* 목록을 뺀 나머지(제목줄 + 칸 여백) */
+      chrome: c.offsetHeight - (open ? list.offsetHeight : 0),
+    };
+  });
+
+  /* 목록 높이를 "정확히 n줄" 로 정하고 칸은 그만큼만 키운다.
+     칸 높이만 맞추면 목록 여백 때문에 줄이 반쯤 잘려 보인다. */
+  const listH = (o, n) => n ? n * o.rowH + (n - 1) * o.gap + o.pad : 0;
+  const cardH = (o, n) => o.chrome + listH(o, n);
+
+  const avail = col.clientHeight - COL_GAP * (cards.length - 1);
+  const show = info.map(o => o.rows);
+  const total = () => info.reduce((sum, o, k) => sum + cardH(o, show[k]), 0);
+
+  /* 자리가 모자라면 아래쪽 칸(우선순위가 낮은 쪽)부터 줄인다.
+     중요도는 오늘 > 다가오는 마감 > 메모 > 반복 업무 순이므로, 마감을 남기고
+     메모를 먼저 접는 게 맞다. 다만 두 줄은 남겨 둔다 - 한 줄만 보이면
+     "더 있다" 는 것조차 알기 어렵다. */
+  const FLOOR = 2;
+  for(let guard = 0; guard < 400 && total() > avail; guard++){
+    let k = -1;
+    for(let j = show.length - 1; j >= 0; j--)
+      if(show[j] > Math.min(info[j].rows, FLOOR)){ k = j; break; }
+    if(k < 0){                                  /* 다 바닥이면 많은 쪽부터 */
+      k = 0;
+      for(let j = 1; j < show.length; j++) if(show[j] > show[k]) k = j;
+      if(show[k] <= 1) break;
+    }
+    show[k]--;
+  }
+
+  info.forEach((o, k) => {
+    if(o.open) o.list.style.height = listH(o, show[k]) + 'px';
+    o.c.style.height = cardH(o, show[k]) + 'px';
+  });
+}
+/* render() 직후에는 아직 배치가 끝나지 않아 칼럼 높이를 잘못 잰다.
+   (첫 화면에서 92px 작게 나와 줄 수가 모자라게 잡혔다)
+   그리기 한 박자 뒤에, 그리고 글꼴이 준비된 뒤에 다시 맞춘다. */
+function queueFit(){
+  cancelAnimationFrame(queueFit._r);
+  queueFit._r = requestAnimationFrame(() => requestAnimationFrame(fitCards));
+}
+addEventListener('resize', () => { clearTimeout(fitCards._t); fitCards._t = setTimeout(fitCards, 120); });
+addEventListener('load', queueFit);
+if(document.fonts && document.fonts.ready) document.fonts.ready.then(queueFit);
 
 /* 시계 */
 function tickClock(){
@@ -165,6 +242,8 @@ function toggleRt(){
   rtCard.classList.toggle('open');
   localStorage.setItem('rt-open', rtCard.classList.contains('open') ? '1' : '0');
   // 화살표 방향은 CSS 가 회전으로 처리한다 (여기서 글리프까지 바꾸면 두 번 뒤집힌다)
+  if(rtCard.classList.contains('open')) rtCard.style.height = '';   /* inset:0 이 먹도록 */
+  else queueFit();
 }
 $('#rt-head').onclick = toggleRt;
 
@@ -495,8 +574,12 @@ function asItem(t){
    에는 뒤로 미뤄서, 반드시 자기 달 안에서 보이게 한다. */
 function isWeekend(d){ const w = dObj(d).getDay(); return w === 0 || w === 6; }
 
+/* 주말 칸을 보여줄지. 켜 두면 마감이 자기 날짜에 그대로 놓이고,
+   끄면 칸이 5개로 넓어지는 대신 주말 마감을 앞 영업일 칸에 얹는다. */
+const weekendOn = () => !!(STATE && STATE.settings && STATE.settings.show_weekend);
+
 function cellDate(d){
-  if(!isWeekend(d)) return d;
+  if(weekendOn() || !isWeekend(d)) return d;
   const m = d.slice(0, 7);
   const back = dObj(d), fwd = dObj(d);
   while(isWeekend(iso(back))) back.setDate(back.getDate() - 1);
@@ -509,7 +592,7 @@ function chipEl(t){
   const el = document.createElement('div');
   const cls = t.done ? 'done' : t.due_date < STATE.today ? 'p'
             : t.due_date === STATE.today ? 't' : 'f';
-  const wk = isWeekend(t.due_date);
+  const wk = isWeekend(t.due_date) && !weekendOn();   /* 앞 영업일 칸에 얹힌 것 */
   el.className = 'chip ' + cls + (wk ? ' wk' : '');
   const d = dObj(t.due_date);
   const head = wk ? d.getDate() + '일(' + WD[(d.getDay() + 6) % 7] + ')' : t.due_time;
@@ -525,7 +608,7 @@ function chipEl(t){
 
 function dayModal(key, list){
   /* 주말 마감을 앞 영업일 칸에 얹었으므로, 목록에서는 실제 날짜를 밝혀 준다 */
-  const wknd = list.filter(t => isWeekend(t.due_date)).length;
+  const wknd = weekendOn() ? 0 : list.filter(t => isWeekend(t.due_date)).length;
   $('#day-title').innerHTML = fmtDay(key) + ' <i class="opt">' + list.length + '건' +
     (wknd ? ' · 주말 마감 ' + wknd + '건 포함' : '') + '</i>';
   const box = $('#day-list');
@@ -567,30 +650,40 @@ function drawCal(){
   const cnt = mine.length, left = mine.filter(t => !t.done).length;
   $('#cal-note').textContent = cnt ? cnt + '건 · ' + left + '건 남음' : '마감 없음';
 
+  const cols = weekendOn() ? 7 : 5;
+  $('#cal-we').classList.toggle('off', !weekendOn());
+  const head = $('#cal-head');
+  head.style.setProperty('--cols', cols);
+  head.innerHTML = WD.slice(0, cols)
+    .map((w, k) => '<span' + (k >= 5 ? ' class="we"' : '') + '>' + w + '</span>').join('');
+
   /* 그 달의 첫 주 월요일부터, 마지막 날이 포함된 주까지 */
   const first = new Date(y, m, 1), last = new Date(y, m + 1, 0);
   const cur = new Date(first);
   cur.setDate(first.getDate() - ((first.getDay() + 6) % 7));
-  const hasWeekday = mon => {                 /* 그 주 월~금 중 이 달에 속한 날이 있나 */
-    for(let k = 0; k < 5; k++){
+  const hasDay = mon => {                     /* 그 주에 이 달에 속한 칸이 있나 */
+    for(let k = 0; k < cols; k++){
       const d = new Date(mon); d.setDate(mon.getDate() + k);
       if(d.getMonth() === m) return true;
     }
     return false;
   };
-  while(!hasWeekday(cur)) cur.setDate(cur.getDate() + 7);
+  while(!hasDay(cur)) cur.setDate(cur.getDate() + 7);
   const grid = $('#cal-grid');
+  grid.style.setProperty('--cols', cols);
   grid.innerHTML = '';
   const HN = STATE.holiday_names || {};
 
-  while(cur <= last && hasWeekday(cur)){
-    for(let k = 0; k < 5; k++){                                   /* 월~금만 */
+  while(cur <= last && hasDay(cur)){
+    for(let k = 0; k < cols; k++){
       const d = new Date(cur); d.setDate(cur.getDate() + k);
       const key = iso(d);
       const out = d.getMonth() !== m;
       const hol = HOL.has(key);
+      const we = isWeekend(key);
       const cell = document.createElement('div');
-      cell.className = 'day' + (out ? ' out' : '') + (hol && !out ? ' hol' : '') +
+      cell.className = 'day' + (out ? ' out' : '') +
+                       (!out && hol ? ' hol' : (!out && we ? ' we' : '')) +
                        (key === STATE.today ? ' now' : '');
       const num = key === STATE.today ? '<b>' + d.getDate() + '</b>' : d.getDate();
       cell.innerHTML = '<div class="n">' + num +
@@ -612,7 +705,8 @@ function drawCal(){
         cell.onclick = () => list.length > CAL_MAX ? dayModal(key, list)
                                                    : openAdd('deadline', {date:key});
         cell.title = hol ? (HN[key] || '공휴일') + ' · 영업일이 아닙니다'
-                         : '눌러서 이 날짜에 마감 추가';
+                         : we ? '주말 · 영업일이 아닙니다'
+                              : '눌러서 이 날짜에 마감 추가';
       }
       grid.appendChild(cell);
     }
@@ -633,6 +727,7 @@ function setView(v){
   $('#v-home').hidden = v !== 'home';
   $('#v-cal').hidden = v !== 'cal';
   if(v === 'cal') drawCal();
+  else queueFit();
 }
 $('#views').onclick = e => {
   const b = e.target.closest('button');
@@ -641,6 +736,12 @@ $('#views').onclick = e => {
 $('#cal-prev').onclick = () => shiftMonth(-1);
 $('#cal-next').onclick = () => shiftMonth(1);
 $('#cal-now').onclick = () => { calCur = null; drawCal(); };
+$('#cal-we').onclick = () => {
+  const on = !weekendOn();
+  STATE.settings.show_weekend = on;          /* 그리기는 바로, 저장은 뒤에 */
+  drawCal();
+  api('/api/settings', {show_weekend: on});
+};
 
 /* ══════════ 전체 관리 ══════════ */
 let mgKind = 'all';

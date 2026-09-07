@@ -84,12 +84,20 @@ input,textarea{user-select:text}
 .ico:active,.pill-btn:active{box-shadow:inset 3px 3px 7px var(--dark), inset -3px -3px 7px var(--light)}
 
 /* ---------- 카드 ---------- */
-.grid{flex:1; display:grid; grid-template-columns:1.1fr 1fr; gap:18px; min-height:0}
-.col{position:relative; display:flex; flex-direction:column; gap:18px; min-height:0}
+/* grid-template-rows 를 minmax(0,1fr) 로 못 박는다. 기본값(auto)이면 행 높이가
+   내용에 따라 늘어나서, fitCards 가 재는 칼럼 높이가 카드 내용에 좌우된다. */
+.grid{flex:1; display:grid; grid-template-columns:1.1fr 1fr;
+  grid-template-rows:minmax(0,1fr); gap:18px; min-height:0}
+.col{position:relative; display:flex; flex-direction:column; gap:18px;
+  min-height:0; overflow:hidden}
 .card{background:var(--card); border-radius:20px; padding:16px 18px 13px; display:flex;
   flex-direction:column; min-height:0; flex:1;
   box-shadow:7px 7px 16px var(--dark), -7px -7px 16px var(--light)}
+/* 오른쪽 칸 높이는 app.js 의 fitCards() 가 한 줄 높이의 정수배로 정한다.
+   flex 비율로 나누면 항목 3개일 때 공백이 남고 4개일 때 넘쳤다. */
 .card.f06{flex:.6}
+#col-right > .card{flex:0 0 auto}
+#col-right > .card.fold{margin-top:auto}   /* 남는 공간은 위에 두고 아래에 붙인다 */
 .card h2{margin:1px 2px 12px; font-size:12px; letter-spacing:.5px; color:var(--ink2);
   font-weight:700; display:flex; align-items:center; gap:8px}
 .h-note{font-style:normal; font-size:10.5px; color:var(--faint); font-weight:500; margin-left:auto}
@@ -114,12 +122,16 @@ input,textarea{user-select:text}
 .card.fold.open .caret{transform:rotate(180deg)}
 
 /* ---------- 항목 ---------- */
-.item{position:relative; overflow:hidden;
-  display:flex; align-items:center; gap:12px; padding:12px 12px 12px 17px; border-radius:15px;
+/* 한 줄 행: 제목이 늘어나고 마감 정보는 오른쪽에 붙는다 */
+.item{position:relative; overflow:hidden; cursor:pointer;
+  /* .list 는 flex 세로 배치다. 높이를 정해 주면(fitCards) 줄이 눌려 납작해지므로
+     줄어들지 않게 못 박는다. 넘치는 것은 목록이 스크롤로 처리한다. */
+  flex:0 0 auto;
+  display:flex; align-items:center; gap:10px; padding:9px 10px 9px 16px; border-radius:14px;
   background:var(--card); transition:box-shadow .16s;
   box-shadow:4px 4px 9px var(--dark), -4px -4px 9px var(--light)}
 /* 왼쪽 띠로 종류를 한눈에: 마감·반복·메모 */
-.item::before{content:""; position:absolute; left:0; top:11px; bottom:11px; width:3px;
+.item::before{content:""; position:absolute; left:0; top:8px; bottom:8px; width:3px;
   border-radius:0 3px 3px 0; background:var(--bar, transparent)}
 .item.k-deadline{--bar:var(--ink2)}
 .item.k-routine{--bar:var(--mid)}
@@ -128,22 +140,22 @@ input,textarea{user-select:text}
 .item:hover{box-shadow:5px 5px 12px var(--dark), -5px -5px 12px var(--light)}
 .item.done{opacity:.55}
 .item.done .t{text-decoration:line-through}
-.dot{width:22px; height:22px; border-radius:50%; flex:0 0 auto; cursor:pointer; position:relative;
+.dot{width:20px; height:20px; border-radius:50%; flex:0 0 auto; cursor:pointer; position:relative;
   background:var(--card); box-shadow:inset 3px 3px 6px var(--dark), inset -3px -3px 6px var(--light)}
 .dot:hover::after{content:""; position:absolute; inset:6px; border-radius:50%; background:var(--faint)}
 .dot:active{box-shadow:inset 5px 5px 9px var(--dark), inset -2px -2px 5px var(--light)}
 .item.done .dot::after{content:""; position:absolute; inset:5px; border-radius:50%; background:var(--mint)}
-.body{flex:1; min-width:0; cursor:pointer}
-.t{font-size:13.5px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
-.meta{font-size:11px; color:var(--muted); margin-top:4px; display:flex; gap:7px; align-items:center;
-  white-space:nowrap; overflow:hidden}
+.t{flex:1; min-width:0; font-size:13px; font-weight:600;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.meta{font-size:11px; color:var(--muted); display:flex; gap:6px; align-items:center;
+  flex:0 0 auto; white-space:nowrap}
 .meta .pill{padding:1px 7px; border-radius:7px; background:var(--bg);
   box-shadow:inset 1px 1px 3px var(--dark), inset -1px -1px 3px var(--light)}
 .meta .late{background:var(--deep); color:var(--deep-fg); font-weight:700;
   padding:2px 8px; border-radius:7px; box-shadow:none}
 .meta .soon{background:var(--mint); color:var(--deep); font-weight:700;
   padding:2px 8px; border-radius:7px}
-.rowbtn{flex:0 0 auto; width:30px; height:30px; border:0; border-radius:10px; cursor:pointer;
+.rowbtn{flex:0 0 auto; width:26px; height:26px; border:0; border-radius:9px; cursor:pointer;
   background:var(--card); color:var(--faint); font-size:13px; line-height:1; padding:0;
   display:grid; place-items:center;
   box-shadow:3px 3px 6px var(--dark), -3px -3px 6px var(--light); transition:color .14s}
@@ -158,8 +170,14 @@ input,textarea{user-select:text}
 
 /* 반복 업무 행 */
 .item.rt{padding-left:15px}
-.item.rt .when{font-size:11.5px; font-weight:700; color:var(--mid); white-space:nowrap;
-  padding:4px 10px; border-radius:9px; background:var(--bg);
+.item.rt .t{flex:1 1 40%}
+.item.rt .rule{flex:0 1 auto; min-width:0; font-size:11px; color:var(--muted);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  padding:2px 8px; border-radius:8px; background:var(--bg);
+  box-shadow:inset 1px 1px 3px var(--dark), inset -1px -1px 3px var(--light)}
+.item.rt .tag{flex:0 0 auto; font-size:10.5px; color:var(--faint); white-space:nowrap}
+.item.rt .when{flex:0 0 auto; font-size:11.5px; font-weight:700; color:var(--mid); white-space:nowrap;
+  padding:3px 9px; border-radius:9px; background:var(--bg);
   box-shadow:inset 2px 2px 4px var(--dark), inset -2px -2px 4px var(--light)}
 .item.rt.today .when{background:var(--deep); color:var(--deep-fg); box-shadow:none}
 .item.rt.cleared .when{background:var(--mint); color:var(--deep); box-shadow:none}
@@ -177,6 +195,8 @@ input,textarea{user-select:text}
   background:var(--card); color:var(--muted); font-size:15px; line-height:1;
   display:grid; place-items:center; font-family:inherit;
   box-shadow:3px 3px 7px var(--dark), -3px -3px 7px var(--light); transition:.14s}
+.cbtn.wide{width:auto; padding:0 11px; font-size:11.5px; font-weight:700}
+.cbtn.wide.off{color:var(--dark)}
 .cbtn:hover{color:var(--ink2)}
 .cbtn:active{box-shadow:inset 2px 2px 5px var(--dark), inset -2px -2px 5px var(--light)}
 .cal-gap{flex:1}
@@ -189,12 +209,13 @@ input,textarea{user-select:text}
 .cal-legend .sw.d{background:transparent; box-shadow:inset 0 0 0 1.5px var(--pale)}
 .cal-top .h-note{margin-left:14px}
 
-.cal-head{display:grid; grid-template-columns:repeat(5,1fr); gap:9px; margin:0 0 7px}
+.cal-head{display:grid; grid-template-columns:repeat(var(--cols,5),1fr); gap:9px; margin:0 0 7px}
+.cal-head .we{color:var(--faint)}
 .cal-head span{text-align:center; font-size:11px; font-weight:700; color:var(--muted);
   letter-spacing:1px}
 
-.cal-grid{flex:1; min-height:0; display:grid; grid-template-columns:repeat(5,1fr);
-  grid-auto-rows:1fr; gap:9px}
+.cal-grid{flex:1; min-height:0; display:grid;
+  grid-template-columns:repeat(var(--cols,5),1fr); grid-auto-rows:1fr; gap:9px}
 
 .day{position:relative; border-radius:13px; padding:7px 8px 6px; overflow:hidden;
   display:flex; flex-direction:column; gap:3px; cursor:pointer; transition:box-shadow .14s;
@@ -208,9 +229,9 @@ input,textarea{user-select:text}
 .day.out{cursor:default;
   box-shadow:inset 1px 1px 3px rgba(179,192,190,.55), inset -1px -1px 3px rgba(246,249,248,.55)}
 .day.out .n{color:var(--dark)}
-.day.hol{box-shadow:inset 2px 2px 5px var(--dark), inset -2px -2px 5px var(--light);
-  background:linear-gradient(160deg, rgba(207,214,213,.55), rgba(207,214,213,.15))}
-.day.hol .n{color:var(--faint)}
+.day.hol,.day.we{box-shadow:inset 2px 2px 5px var(--dark), inset -2px -2px 5px var(--light);
+  background:linear-gradient(160deg, rgba(199,208,207,.8), rgba(207,214,213,.35))}
+.day.hol .n,.day.we .n{color:var(--faint)}
 
 /* 오늘 - 유일하게 올라온 칸 */
 .day.now{box-shadow:4px 4px 10px var(--dark), -4px -4px 10px var(--light)}
