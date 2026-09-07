@@ -16,14 +16,14 @@ from ctypes import wintypes
 
 # 팔레트: #08202b · #0b2c36 · #4d7572 · #85bdb3 · #cfd6d5
 CARD    = "#dde3e2"
-SHADOW  = "#98a8a6"
-LIGHT   = "#ffffff"
+EDGE    = "#aebbb9"      # 카드·버튼 경계선
+PALE    = "#cfd6d5"
 TEXT    = "#08202b"
 MUTED   = "#4d7572"
 ACCENT  = "#4d7572"
 DEEP    = "#08202b"
 
-PAD = 18                      # 그림자가 번질 여백
+PAD = 4                       # 카드 밖 여백 (블러가 없으니 조금만)
 CW, CH = 380, 162             # 카드 본체 (제목 두 줄이 들어갈 만큼)
 W, H = CW + PAD * 2, CH + PAD * 2
 R, GAP = 20, 6
@@ -163,27 +163,39 @@ def _fit(text, font, width):
 _bgcache = {}
 
 
+def _ring(size, radius, color, alpha=255, width=1):
+    """둥근 사각형 테두리만. 4배로 그린 뒤 줄여서 계단을 없앤다."""
+    from PIL import Image, ImageDraw
+    w, h = size
+    sc = 4
+    m = Image.new("L", (w * sc, h * sc), 0)
+    ImageDraw.Draw(m).rounded_rectangle(
+        [0, 0, w * sc - 1, h * sc - 1], radius=radius * sc,
+        outline=255, width=max(1, width * sc))
+    m = m.resize((w, h), Image.LANCZOS)
+    layer = Image.new("RGBA", (w, h), _rgb(color) + (0,))
+    layer.putalpha(m.point(lambda v: int(v * alpha / 255)))
+    return layer
+
+
 def _card_bg(accent, hover, label="완료"):
-    """글자를 뺀 카드 바탕. hover 는 None / 'btn' / 'x'."""
+    """글자를 뺀 카드 바탕. hover 는 None / 'btn' / 'x'.
+
+    그림자(블러)를 쓰지 않는다. 카드는 바닥이 무엇일지 모르는 화면 위에 뜨므로
+    경계만 얇은 선으로 잡아 주고, 나머지는 담백하게 면으로 채운다.
+    """
     key = (accent, hover, label)
     if key in _bgcache:
         return _bgcache[key]
 
-    from PIL import Image, ImageDraw, ImageFilter
+    from PIL import Image, ImageDraw
 
     img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     shape = _round((CW, CH), R)
 
-    # 부드러운 이중 그림자 (뉴모피즘)
-    for off, col, alpha, blur in (((7, 8), SHADOW, 150, 9), ((-6, -7), LIGHT, 190, 9)):
-        layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        tint = Image.new("RGBA", (CW, CH), _rgb(col) + (alpha,))
-        layer.paste(tint, (PAD + off[0], PAD + off[1]), shape)
-        img.alpha_composite(layer.filter(ImageFilter.GaussianBlur(blur)))
-
-    img.paste(Image.new("RGBA", (CW, CH), _rgb(CARD) + (255,)), (PAD, PAD), shape)
-
     card = Image.new("RGBA", (CW, CH), (0, 0, 0, 0))
+    card.paste(Image.new("RGBA", (CW, CH), _rgb(CARD) + (255,)), (0, 0), shape)
+    card.alpha_composite(_ring((CW, CH), R, EDGE, 255, 1))     # 경계선
     d = ImageDraw.Draw(card)
 
     # 왼쪽 강조 바 (글자 블록 옆)
@@ -192,23 +204,17 @@ def _card_bg(accent, hover, label="완료"):
 
     f_btn = _font(FONTS_BD, 12)
 
-    # ── 완료 버튼: 하단 전체 폭, 확실히 올라온 면 ──
+    # ── 완료 버튼: 하단 전체 폭, 얇은 알약형 ──
     bx, by, bw, bh = BTN
-    br = bh // 2          # 얇은 알약형
-    btn = Image.new("RGBA", (CW, CH), (0, 0, 0, 0))
+    br = bh // 2
     if hover == "btn":
-        face, face_label = accent, DEEP
-        # 눌러 내려간 느낌 (안쪽 음영)
-        sh = Image.new("RGBA", (bw, bh), _rgb(DEEP) + (70,))
-        btn.paste(sh, (bx, by + 2), _round((bw, bh), br))
+        face, face_label, line = accent, DEEP, accent
     else:
-        face, face_label = BTN_FACE, ACCENT
-        for off, col, a, blur in (((0, 3), SHADOW, 150, 3), ((0, -2), LIGHT, 205, 2)):
-            l = Image.new("RGBA", (CW, CH), (0, 0, 0, 0))
-            l.paste(Image.new("RGBA", (bw, bh), _rgb(col) + (a,)),
-                    (bx + off[0], by + off[1]), _round((bw, bh), br))
-            btn.alpha_composite(l.filter(ImageFilter.GaussianBlur(blur)))
-    btn.paste(Image.new("RGBA", (bw, bh), _rgb(face) + (255,)), (bx, by), _round((bw, bh), br))
+        face, face_label, line = BTN_FACE, ACCENT, EDGE
+    btn = Image.new("RGBA", (CW, CH), (0, 0, 0, 0))
+    btn.paste(Image.new("RGBA", (bw, bh), _rgb(face) + (255,)), (bx, by),
+              _round((bw, bh), br))
+    btn.alpha_composite(_ring((bw, bh), br, line, 255, 1), (bx, by))
     card.alpha_composite(btn)
     d.text((bx + bw / 2, by + bh / 2 - 1), label, font=f_btn, anchor="mm",
            fill=_rgb(face_label) + (255,))
@@ -216,7 +222,7 @@ def _card_bg(accent, hover, label="완료"):
     # ── 닫기 ✕ ──
     cx, cy, cw, ch = CLOSE
     if hover == "x":
-        card.paste(Image.new("RGBA", (cw, ch), _rgb(SHADOW) + (110,)),
+        card.paste(Image.new("RGBA", (cw, ch), _rgb(PALE) + (255,)),
                    (cx, cy), _round((cw, ch), 9))
     xm = _x_mark(14, TEXT if hover == "x" else MUTED, 255 if hover == "x" else 200)
     card.alpha_composite(xm, (cx + (cw - 14) // 2, cy + (ch - 14) // 2))
