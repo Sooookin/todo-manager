@@ -82,7 +82,7 @@ def open_window():
         return
     log(f"open_window: frozen={paths.FROZEN} exe={sys.executable!r}")
     try:
-        import webview  # noqa: F401
+        __import__("webview")        # 네이티브 창을 쓸 수 있는지 확인만 한다
         if paths.FROZEN:
             # --windowed 빌드는 표준 입출력 핸들이 없다. 명시하지 않으면
             # Popen 이 부모 핸들을 복제하려다 실패할 수 있다.

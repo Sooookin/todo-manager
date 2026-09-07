@@ -106,7 +106,10 @@ def extra_binaries():
         return []
 
     need, out = [], []
-    for mod in ("_ctypes", "_tkinter", "_socket", "select", "_queue", "_ssl"):
+    # _tkinter · _ssl 은 일부러 뺐다. tkinter 는 더 이상 쓰지 않고(toast 는 Win32),
+    # ssl 은 main.stub_ssl() 이 껍데기를 끼운다. 둘을 넣으면 tcl/tk 6MB +
+    # libcrypto/libssl 5.8MB 가 따라 들어온다.
+    for mod in ("_ctypes", "_socket", "select", "_queue"):
         p = os.path.join(dll_dir, mod + ".pyd")
         if not os.path.exists(p):
             continue
@@ -137,11 +140,20 @@ PRUNE = [
     "_internal/PIL/_avif.cp*.pyd",        # AVIF 코덱 7.5MB - 안 씀
     "_internal/PIL/_webp.cp*.pyd",        # WebP  0.4MB - 안 씀
     "_internal/PIL/_imagingcms.cp*.pyd",  # 컬러 매니지먼트 0.3MB - 안 씀
-    "_internal/_tcl_data/tzdata",         # Tcl 시간대 DB 2.0MB - 안 씀
-    "_internal/_tcl_data/msgs",           # Tcl 번역 메시지 - 안 씀
-    # 주의: libcrypto/libssl 은 지우면 안 된다.
-    #       pywebview 의 http.py 가 import ssl 을 하고, 없으면 네이티브 창이
-    #       통째로 실패해서 Edge 폴백으로 떨어진다.
+    "_internal/PIL/_imagingmath.cp*.pyd",
+    "_internal/PIL/_imagingmorph.cp*.pyd",
+    # tcl/tk 는 이제 안 쓴다 (혹시 딸려 들어오면 지운다)
+    "_internal/_tcl_data", "_internal/_tk_data", "_internal/tcl8",
+    "_internal/tcl86t.dll", "_internal/tk86t.dll", "_internal/_tkinter.pyd",
+    # ssl 껍데기를 쓰므로 필요 없다 (main.stub_ssl)
+    "_internal/libcrypto-3-x64.dll", "_internal/libssl-3-x64.dll",
+    "_internal/_ssl.pyd", "_internal/_hashlib.pyd",
+    # runtimes/win-arm64 · win-x86 은 지우면 안 된다. pywebview 의
+    # edgechromium.py 가 세 폴더 모두를 Path 에 넣으려고 존재를 확인하고,
+    # 하나라도 없으면 FileNotFoundError 로 창이 통째로 Edge 폴백이 된다.
+    # 문서·디버그 부산물
+    "_internal/pythonnet/runtime/*.xml",
+    "_internal/**/*.pdb",
 ]
 
 
@@ -150,7 +162,7 @@ def prune(root):
     import glob
     freed = 0
     for pat in PRUNE:
-        for p in glob.glob(os.path.join(root, pat.replace("/", os.sep))):
+        for p in glob.glob(os.path.join(root, pat.replace("/", os.sep)), recursive=True):
             if os.path.isdir(p):
                 for r, _, fs in os.walk(p):
                     freed += sum(os.path.getsize(os.path.join(r, f)) for f in fs)
@@ -191,7 +203,7 @@ def main():
             "--add-data", f"app.ico{os.pathsep}.",
             ]
     # 지연 임포트되는 것들
-    for m in ("PIL.ImageTk", "pystray._win32", "clr",
+    for m in ("pystray._win32", "clr",
               "webview.platforms.winforms", "webview.platforms.edgechromium"):
         args += ["--hidden-import", m]
     # pywebview 는 WebView2 DLL 을 자기 패키지 안에 들고 있다
@@ -201,7 +213,21 @@ def main():
     for m in ("numpy", "pandas", "scipy", "matplotlib", "IPython", "jupyter",
               "notebook", "nbformat", "sklearn", "sympy", "numba", "llvmlite",
               "PyQt5", "PyQt6", "PySide2", "PySide6", "qtpy", "cv2", "zmq",
-              "tornado", "dask", "bokeh", "pytest", "setuptools", "pip"):
+              "tornado", "dask", "bokeh", "pytest", "setuptools", "pip",
+              # 창은 Win32 로 직접 그린다 (toast.py). tcl/tk 6MB 를 뺀다.
+              "tkinter", "_tkinter", "PIL.ImageTk", "PIL.ImageQt",
+              # ssl 은 껍데기로 대체 (main.stub_ssl) - libcrypto/libssl 5.8MB
+              "ssl", "_ssl", "_hashlib",
+              # 우리가 쓰지 않는 표준 모듈. asyncio·concurrent·multiprocessing·
+              # distutils 는 일부러 남겼다 - 다른 패키지가 몰래 쓸 수 있고,
+              # 빠져 있으면 창이 통째로 Edge 폴백으로 떨어진다.
+              "unittest", "doctest", "pydoc", "pydoc_data", "lib2to3",
+              "sqlite3", "xmlrpc", "pickletools", "ftplib", "imaplib",
+              "poplib", "smtplib", "turtle", "turtledemo", "idlelib",
+              # unicodedata 는 빼면 안 된다 - bottle 이 쓰고, bottle 이 죽으면
+              # pywebview 가 통째로 못 올라온다 (--selftest 로 확인)
+              "ensurepip", "venv", "zoneinfo",
+              "decimal", "_decimal", "bz2", "_bz2", "lzma", "_lzma"):
         args += ["--exclude-module", m]
     args += extra_binaries()
     args.append("main.py")
@@ -218,7 +244,7 @@ def main():
         f.write(READ_ME)
 
     zip_path = os.path.join(RELEASE, OUT_NAME + ".zip")
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         for root, _, files in os.walk(dst):
             for name in files:
                 full = os.path.join(root, name)

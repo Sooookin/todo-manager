@@ -10,6 +10,52 @@
 import sys
 
 
+def stub_ssl():
+    """ssl 자리에 껍데기를 끼운다 (배포 용량 5.8MB 절약).
+
+    pywebview 의 http.py 가 최상단에서 import ssl 을 한다. 그 파일의 SSL 서버는
+    우리가 쓰지 않는다 - 우리 서비스(127.0.0.1:8777)의 http URL 을 그대로 띄운다.
+    그런데 _ssl 하나 때문에 libcrypto(5.0MB) + libssl(0.8MB) 이 따라 들어온다.
+
+    조용히 잘못 동작하는 것이 제일 나쁘므로, 껍데기를 건드리는 순간
+    바로 터지고 로그에 스택까지 남긴다. 소스로 실행할 때는 진짜 ssl 을 쓴다.
+    """
+    if "ssl" in sys.modules:
+        return
+    try:
+        __import__("ssl")
+        return                                        # 진짜가 있으면 그대로
+    except ImportError:
+        pass
+
+    import types
+
+    def missing(name):
+        """껍데기를 건드리면 로그를 한 번 남기고 AttributeError 를 낸다.
+
+        AttributeError 로 내보내야 hasattr 같은 확인은 조용히 False 가 되고,
+        실제로 쓰려는 곳은 바로 실패한다. 조용히 잘못 동작하는 것보다 낫다.
+        """
+        if not (name.startswith("__") and name.endswith("__")):
+            import traceback
+            try:
+                import paths
+                paths.log("ssl 껍데기 접근: %s" % name + chr(10)
+                          + "".join(traceback.format_stack()[-4:]))
+            except Exception:
+                pass
+        raise AttributeError(
+            "ssl.%s - 이 빌드에는 ssl 이 없습니다 (용량을 줄이려고 제외)" % name)
+
+    m = types.ModuleType("ssl")
+    m.__getattr__ = missing
+    m.SSLError = type("SSLError", (OSError,), {})
+    m.CERT_NONE = 0
+    sys.modules["ssl"] = m
+
+
+
+
 def selftest():
     """빌드본에서 무엇이 안 되는지 파일로 남긴다. 콘솔이 없어 화면에 못 찍기 때문."""
     import os
@@ -30,7 +76,9 @@ def selftest():
         "",
         "[import 점검]",
     ]
-    for mod in ("tkinter", "PIL", "PIL.Image", "PIL.ImageDraw", "PIL.ImageFilter",
+    lines.append("  ssl         " + ("껍데기(용량 절약)" if getattr(
+        sys.modules.get("ssl"), "__file__", None) is None else "정품"))
+    for mod in ("PIL", "PIL.Image", "PIL.ImageDraw", "PIL.ImageFilter",
                 "pystray", "pystray._win32", "clr", "clr_loader",
                 "bottle", "proxy_tools", "webview", "webview.guilib",
                 "webview.platforms.winforms", "webview.platforms.edgechromium"):
@@ -73,6 +121,7 @@ def selftest():
 
 
 def run():
+    stub_ssl()
     if "--selftest" in sys.argv:
         selftest()
     elif "--ui" in sys.argv:

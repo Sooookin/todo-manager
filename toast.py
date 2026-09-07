@@ -3,7 +3,8 @@
 
 카드 전체를 Pillow 로 그린 뒤 Windows 레이어드 윈도우(UpdateLayeredWindow)로 띄운다.
 픽셀 단위 알파를 쓰기 때문에 모서리가 계단식으로 깨지지 않고, 진짜 흐린 그림자도 낼 수 있다.
-(GDI 나 Pillow 를 못 쓰는 환경이면 예전 tkinter 캔버스 방식으로 자동 폴백)
+창과 이벤트 루프도 Win32 로 직접 다룬다 - tkinter 를 쓰면 배포본에
+tcl/tk 6MB 가 따라 들어온다.
 """
 import ctypes
 import queue
@@ -11,7 +12,6 @@ import time
 import traceback
 
 import paths
-import tkinter as tk
 from ctypes import wintypes
 
 # 팔레트: #08202b · #0b2c36 · #4d7572 · #85bdb3 · #cfd6d5
@@ -21,9 +21,7 @@ LIGHT   = "#ffffff"
 TEXT    = "#08202b"
 MUTED   = "#4d7572"
 ACCENT  = "#4d7572"
-MINT    = "#85bdb3"
 DEEP    = "#08202b"
-TRANSP  = "#ff00ff"
 
 PAD = 18                      # 그림자가 번질 여백
 CW, CH = 380, 162             # 카드 본체 (제목 두 줄이 들어갈 만큼)
@@ -45,8 +43,6 @@ FONTS_BD = [r"C:\Windows\Fonts\malgunbd.ttf", r"C:\Windows\Fonts\malgun.ttf"]
 
 _queue = queue.Queue()
 _live = []
-_root = None
-_use_layered = True
 
 
 LIFE_MS = 11000               # 카드가 화면에 머무는 시간
@@ -306,13 +302,6 @@ G32.DeleteObject.argtypes = [PVOID]
 G32.DeleteDC.argtypes = [PVOID]
 
 
-def toplevel_hwnd(widget):
-    """Tk 은 최상위 창을 감싸는 래퍼를 따로 만든다. winfo_id() 는 그 안쪽 자식이다."""
-    h = widget.winfo_id()
-    p = U32.GetParent(h)
-    return p if p else h
-
-
 def _premultiplied_bgra(img):
     """PIL RGBA → 알파 미리곱한 BGRA 바이트."""
     from PIL import Image, ImageChops
@@ -363,323 +352,332 @@ def _paint_layered(hwnd, img, alpha=255):
         G32.DeleteDC(mem_dc)
         U32.ReleaseDC(None, screen_dc)
 
+# ---------------- 창 (순수 Win32) ----------------
+# 예전에는 tkinter 를 창 껍데기와 타이머로만 썼는데, 그 하나 때문에 배포본에
+# tcl/tk 가 6MB 들어갔다. 카드는 어차피 UpdateLayeredWindow 로 직접 그리므로
+# 창과 이벤트 루프도 Win32 로 직접 다룬다.
+WM_DESTROY, WM_TIMER = 0x0002, 0x0113
+WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_MOUSELEAVE = 0x0200, 0x0201, 0x02A3
+WM_SETCURSOR = 0x0020
+WS_POPUP = 0x80000000
+WS_EX_TOPMOST, WS_EX_NOACTIVATE = 0x00000008, 0x08000000
+SW_SHOWNOACTIVATE, SW_HIDE = 4, 0
+SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER = 0x0010, 0x0001, 0x0004
+HWND_TOPMOST = -1
+IDC_ARROW, IDC_HAND = 32512, 32649
+TME_LEAVE = 0x00000002
+IDLE_MS, ANIM_MS = 400, 30      # 놀 때는 느리게, 움직일 때만 빠르게
 
-# ---------------- 폴백용 캔버스 도형 ----------------
-def _poly(c, x1, y1, x2, y2, r, **kw):
-    return c.create_polygon(
-        x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2, x2 - r, y2,
-        x1 + r, y2, x1, y2, x1, y2 - r, x1, y1 + r, x1, y1, smooth=True, **kw)
+LRESULT = ctypes.c_ssize_t
+WPARAM = ctypes.c_size_t
+LPARAM = ctypes.c_ssize_t
+WNDPROC = ctypes.WINFUNCTYPE(LRESULT, PVOID, ctypes.c_uint, WPARAM, LPARAM)
 
 
-class Card(tk.Toplevel):
-    def __init__(self, master, item):
-        super().__init__(master)
+class WNDCLASS(ctypes.Structure):
+    _fields_ = [("style", wintypes.UINT), ("lpfnWndProc", WNDPROC),
+                ("cbClsExtra", ctypes.c_int), ("cbWndExtra", ctypes.c_int),
+                ("hInstance", PVOID), ("hIcon", PVOID), ("hCursor", PVOID),
+                ("hbrBackground", PVOID), ("lpszMenuName", ctypes.c_wchar_p),
+                ("lpszClassName", ctypes.c_wchar_p)]
+
+
+class TRACKMOUSEEVENT(ctypes.Structure):
+    _fields_ = [("cbSize", wintypes.DWORD), ("dwFlags", wintypes.DWORD),
+                ("hwndTrack", PVOID), ("dwHoverTime", wintypes.DWORD)]
+
+
+class MSG(ctypes.Structure):
+    _fields_ = [("hwnd", PVOID), ("message", wintypes.UINT), ("wParam", WPARAM),
+                ("lParam", LPARAM), ("time", wintypes.DWORD),
+                ("pt_x", ctypes.c_long), ("pt_y", ctypes.c_long)]
+
+
+U32.DefWindowProcW.restype = LRESULT
+U32.DefWindowProcW.argtypes = [PVOID, ctypes.c_uint, WPARAM, LPARAM]
+U32.CreateWindowExW.restype = PVOID
+U32.CreateWindowExW.argtypes = [wintypes.DWORD, ctypes.c_wchar_p, ctypes.c_wchar_p,
+                                wintypes.DWORD, ctypes.c_int, ctypes.c_int,
+                                ctypes.c_int, ctypes.c_int, PVOID, PVOID, PVOID, PVOID]
+U32.RegisterClassW.argtypes = [ctypes.POINTER(WNDCLASS)]
+U32.SetWindowPos.argtypes = [PVOID, PVOID, ctypes.c_int, ctypes.c_int,
+                             ctypes.c_int, ctypes.c_int, wintypes.UINT]
+U32.SetTimer.restype = PVOID
+U32.SetTimer.argtypes = [PVOID, PVOID, wintypes.UINT, PVOID]
+U32.KillTimer.argtypes = [PVOID, PVOID]
+U32.DestroyWindow.argtypes = [PVOID]
+U32.ShowWindow.argtypes = [PVOID, ctypes.c_int]
+U32.LoadCursorW.restype = PVOID
+U32.LoadCursorW.argtypes = [PVOID, ctypes.c_wchar_p]
+U32.SetCursor.restype = PVOID
+U32.SetCursor.argtypes = [PVOID]
+U32.GetMessageW.argtypes = [ctypes.POINTER(MSG), PVOID, wintypes.UINT, wintypes.UINT]
+U32.TranslateMessage.argtypes = [ctypes.POINTER(MSG)]
+U32.DispatchMessageW.argtypes = [ctypes.POINTER(MSG)]
+U32.TrackMouseEvent.argtypes = [ctypes.POINTER(TRACKMOUSEEVENT)]
+
+_cards = {}                     # hwnd -> Card
+_ctrl = None                    # 타이머만 받는 숨은 창
+_rate = 0                       # 지금 타이머 간격
+_cursors = {}
+
+
+def _cursor(which):
+    if which not in _cursors:
+        _cursors[which] = U32.LoadCursorW(None, ctypes.c_wchar_p(which))
+    return _cursors[which]
+
+
+def _lo(v):
+    v &= 0xFFFF
+    return v - 0x10000 if v > 0x7FFF else v
+
+
+class Card:
+    """알림 카드 하나 = 레이어드 창 하나."""
+
+    def __init__(self, item):
         self.item = item
-        self.overrideredirect(True)
-        self.attributes("-topmost", True)
-        self.layered = False
-        self.img = None
-        self.pos = (0, 0)
         self.alpha = 0
+        self.step = 30                      # 나타나는 중
         self.hover = None
-
-        if _use_layered:
-            try:
-                self.img = _card_rgba(item)
-                self.layered = True
-            except Exception:
-                self.layered = False
-
-        if self.layered:
-            self.geometry(f"{W}x{H}+0+0")
-            self.update_idletasks()
-        else:
-            self._build_canvas(item)
-        for w in (self, getattr(self, "canvas", None)):
-            if w is None:
-                continue
-            w.bind("<Button-1>", self._click)
-            w.bind("<Motion>", self._motion)
-            w.bind("<Leave>", self._leave)
-
+        self.over = False
         self.born = time.time()
-        self._closing = False
-        self._over = False
-        self.after(LIFE_MS, self._expire)
+        self.closing = False
+        self.pos = (0, 0)
+        self.img = _card_rgba(item)
+        self.hwnd = U32.CreateWindowExW(
+            WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
+            _CLASS_NAME, "To-Do Manager 알림", WS_POPUP,
+            0, 0, W, H, None, None, None, None)
+        if not self.hwnd:
+            raise OSError("CreateWindowEx 실패 (%d)" % ctypes.get_last_error())
+        _cards[self.hwnd] = self
+        U32.ShowWindow(self.hwnd, SW_SHOWNOACTIVATE)
 
-    # --- 폴백: 캔버스로 직접 그리기 ---
-    def _build_canvas(self, item):
-        self.attributes("-alpha", 0.0)
-        self.configure(bg=TRANSP)
-        keyed = True
+    # --- 배치 ---
+    def place(self, x, y):
+        self.pos = (x, y)
+        U32.SetWindowPos(self.hwnd, PVOID(HWND_TOPMOST & 0xFFFFFFFFFFFFFFFF),
+                         x, y, W, H, SWP_NOACTIVATE)
+        self.paint()
+
+    def paint(self):
         try:
-            self.attributes("-transparentcolor", TRANSP)
-        except tk.TclError:
-            keyed = False
-            self.configure(bg=CARD)
-        c = tk.Canvas(self, width=CW, height=CH, bg=TRANSP if keyed else CARD,
-                      highlightthickness=0, bd=0)
-        c.pack()
-        self.canvas = c
-        _poly(c, 4, 4, CW - 2, CH - 2, R, fill=SHADOW, outline="")
-        _poly(c, 2, 2, CW - 4, CH - 4, R, fill=CARD, outline=LIGHT)
-        c.create_rectangle(24, 28, 28, 76, fill=item["accent"], outline="")
-        c.create_text(44, 37, anchor="w", text=item["title"][:24], fill=TEXT,
-                      font=("Malgun Gothic", 11, "bold"))
-        c.create_text(44, 62, anchor="w", text=item["sub"][:32], fill=MUTED,
-                      font=("Malgun Gothic", 9))
-        bx, by, bw, bh = BTN
-        face = _poly(c, bx, by, bx + bw, by + bh, bh // 2, fill=BTN_FACE, outline=SHADOW)
-        lab = c.create_text(bx + bw / 2, by + bh / 2, text="완료", fill=ACCENT,
-                            font=("Malgun Gothic", 10, "bold"))
-        self._btn_ids = (face, lab)
-        cx, cy, cw, ch = CLOSE
-        c.create_line(cx + 4, cy + 4, cx + cw - 4, cy + ch - 4, fill=MUTED, width=2)
-        c.create_line(cx + 4, cy + ch - 4, cx + cw - 4, cy + 4, fill=MUTED, width=2)
+            _paint_layered(self.hwnd, self.img, self.alpha)
+        except Exception:
+            paths.log("toast.paint 실패: " + traceback.format_exc())
 
-    def _hit(self, ex, ey):
-        off = PAD if self.layered else 0
-        x, y = ex - off, ey - off
+    # --- 마우스 ---
+    def _hit(self, x, y):
+        cx, cy = x - PAD, y - PAD
         bx, by, bw, bh = BTN
-        cx, cy, cw, ch = CLOSE
-        if bx <= x <= bx + bw and by <= y <= by + bh:
+        if bx <= cx <= bx + bw and by <= cy <= by + bh:
             return "btn"
-        if cx - 3 <= x <= cx + cw + 3 and cy - 3 <= y <= cy + ch + 3:
+        ox, oy, ow, oh = CLOSE
+        if ox <= cx <= ox + ow and oy <= cy <= oy + oh:
             return "x"
         return None
 
-    def _click(self, e):
-        t = self._hit(e.x, e.y)
-        if t == "btn":
-            self.done()
-        elif t == "x":
-            self.close()
-
-    def _motion(self, e):
-        self._over = True
-        t = self._hit(e.x, e.y)
+    def on_move(self, x, y):
+        if not self.over:
+            self.over = True
+            tme = TRACKMOUSEEVENT(ctypes.sizeof(TRACKMOUSEEVENT), TME_LEAVE,
+                                  self.hwnd, 0)
+            U32.TrackMouseEvent(ctypes.byref(tme))
+        t = self._hit(x, y)
         if t == self.hover:
             return
         self.hover = t
         try:
-            self.configure(cursor="hand2" if t else "arrow")
-        except tk.TclError:
-            pass
-        if self.layered:
-            try:
-                self.img = _card_rgba(self.item, t)
-            except Exception:
-                return
-            self._repaint()
-        else:
-            self._paint_canvas_hover(t)
+            self.img = _card_rgba(self.item, t)
+        except Exception:
+            return
+        self.paint()
 
-    def _leave(self, e):
-        self._over = False
+    def on_leave(self):
+        self.over = False
         if self.hover is not None:
             self.hover = None
             try:
-                self.configure(cursor="arrow")
-            except tk.TclError:
+                self.img = _card_rgba(self.item, None)
+                self.paint()
+            except Exception:
                 pass
-            if self.layered:
+
+    def on_click(self, x, y):
+        t = self._hit(x, y)
+        if t == "btn":
+            cb = self.item.get("on_done")
+            if cb:
                 try:
-                    self.img = _card_rgba(self.item, None)
-                    self._repaint()
+                    cb()
                 except Exception:
-                    pass
-            else:
-                self._paint_canvas_hover(None)
+                    paths.log("toast on_done 실패: " + traceback.format_exc())
+            self.close()
+        elif t == "x":
+            self.close()
 
-    def _paint_canvas_hover(self, t):
-        """폴백(캔버스) 모드에서의 간단한 hover 표시."""
-        if not hasattr(self, "_btn_ids"):
-            return
-        face, label = ((ACCENT, DEEP) if t == "btn" else (BTN_FACE, ACCENT))
-        try:
-            self.canvas.itemconfigure(self._btn_ids[0], fill=face)
-            self.canvas.itemconfigure(self._btn_ids[1], fill=label)
-        except tk.TclError:
-            pass
-
-    def place(self, x, y):
-        self.pos = (x, y)
-        if self.layered:
-            self.geometry(f"{W}x{H}+{x}+{y}")
-            self.update_idletasks()
-            self._repaint()
-        else:
-            self.geometry(f"{CW}x{CH}+{x}+{y}")
-
-    def _repaint(self):
-        """레이어드 페인트. 실패하면 이 카드부터 캔버스 방식으로 되돌린다."""
-        global _use_layered
-        if not self.layered:
-            return
-        try:
-            _paint_layered(toplevel_hwnd(self), self.img, self.alpha)
-        except Exception:
-            _use_layered = False
-            self.layered = False
-            try:
-                self._build_canvas(self.item)
-                x, y = self.pos
-                self.geometry(f"{CW}x{CH}+{x + PAD}+{y + PAD}")
-                self.attributes("-alpha", self.alpha / 255)
-            except Exception:
-                pass
-
-    def set_alpha(self, a):
-        self.alpha = max(0, min(255, int(a)))
-        if self.layered:
-            self._repaint()
-        else:
-            try:
-                self.attributes("-alpha", self.alpha / 255)
-            except Exception:
-                pass
-
-    def done(self):
-        cb = self.item.get("on_done")
-        if cb:
-            try:
-                cb()
-            except Exception:
-                pass
-        self.close()
-
-    def fade(self, target, step):
-        a = self.alpha + step
-        done = (step > 0 and a >= target) or (step < 0 and a <= 0)
-        self.set_alpha(target if step > 0 and done else max(0, a))
-        if done:
-            if step < 0:
-                self._destroy()
-            return
-        self.after(16, lambda: self.fade(target, step))
-
-    def _expire(self):
-        """수명이 끝났다. 읽고 있는 중이면(마우스가 위에 있으면) 조금 기다린다."""
-        if self._over and time.time() - self.born < HOLD_MAX:
-            self.after(1000, self._expire)
-            return
-        self.close()
-
+    # --- 수명 ---
     def close(self):
-        if self._closing or self not in _live:
+        if self.closing:
             return
-        self._closing = True
-        self.fade(0, -30)
+        self.closing = True
+        self.step = -30
 
-    def _destroy(self):
+    def destroy(self):
+        _cards.pop(self.hwnd, None)
         if self in _live:
             _live.remove(self)
         try:
-            self.destroy()
+            U32.DestroyWindow(self.hwnd)
         except Exception:
             pass
-        _layout()
 
 
-class _RECT(ctypes.Structure):
-    _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
-                ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+def _wndproc(hwnd, msg, wp, lp):
+    if msg == WM_TIMER:
+        if hwnd == _ctrl:
+            _pump()
+        return 0
+    card = _cards.get(hwnd)
+    if card is not None:
+        if msg == WM_MOUSEMOVE:
+            card.on_move(_lo(lp), _lo(lp >> 16))
+            return 0
+        if msg == WM_LBUTTONDOWN:
+            card.on_click(_lo(lp), _lo(lp >> 16))
+            return 0
+        if msg == WM_MOUSELEAVE:
+            card.on_leave()
+            return 0
+        if msg == WM_SETCURSOR:
+            U32.SetCursor(_cursor(IDC_HAND if card.hover else IDC_ARROW))
+            return 1
+        if msg == WM_DESTROY:
+            _cards.pop(hwnd, None)
+            return 0
+    return U32.DefWindowProcW(hwnd, msg, wp, lp)
+
+
+_WNDPROC_REF = WNDPROC(_wndproc)      # 살려 둬야 한다. 가비지가 되면 즉시 죽는다
+_CLASS_NAME = "TodoManagerToast"
+
+
+def _register():
+    wc = WNDCLASS()
+    wc.style = 0x0020                  # CS_OWNDC 아님: CS_HREDRAW/VREDRAW 불필요
+    wc.lpfnWndProc = _WNDPROC_REF
+    wc.hInstance = None
+    wc.hCursor = _cursor(IDC_ARROW)
+    wc.lpszClassName = _CLASS_NAME
+    if not U32.RegisterClassW(ctypes.byref(wc)):
+        err = ctypes.get_last_error()
+        if err != 1410:                # ERROR_CLASS_ALREADY_EXISTS
+            raise OSError("RegisterClass 실패 (%d)" % err)
 
 
 def _work_area():
     """작업표시줄을 뺀 화면 영역. 화면 크기로 계산하면 카드가 작업표시줄에 가린다."""
     try:
-        r = _RECT()
+        r = wintypes.RECT()
         if U32.SystemParametersInfoW(0x0030, 0, ctypes.byref(r), 0):   # SPI_GETWORKAREA
             return r.left, r.top, r.right, r.bottom
     except Exception:
         pass
-    return 0, 0, _root.winfo_screenwidth(), _root.winfo_screenheight()
+    return 0, 0, U32.GetSystemMetrics(0), U32.GetSystemMetrics(1)
 
 
 def _layout():
     _, _, sw, sh = _work_area()
     for n, card in enumerate(reversed(_live)):
-        pad = PAD if card.layered else 0
-        w = W if card.layered else CW
-        try:
-            card.place(sw - w - 20 + pad, sh - 12 - (n + 1) * (CH + GAP) - pad)
-        except Exception:
-            paths.log("toast: " + traceback.format_exc())
+        card.place(sw - W - 20 + PAD, sh - 12 - (n + 1) * (CH + GAP) - PAD)
+
+
+def _set_rate(ms):
+    """타이머 간격. 놀 때 30ms 로 돌 이유가 없다."""
+    global _rate
+    if ms == _rate:
+        return
+    if _rate:
+        U32.KillTimer(_ctrl, PVOID(1))
+    U32.SetTimer(_ctrl, PVOID(1), ms, None)
+    _rate = ms
 
 
 def _pump():
+    """큐 처리 + 페이드 진행 + 수명 정리. 무슨 일이 있어도 죽지 않는다."""
     if not getattr(_pump, "_logged", False):
         _pump._logged = True
         paths.log("toast._pump: 첫 실행")
     try:
-        while True:
+        moved = False
+        while True:                                     # 새 알림
             try:
                 item = _queue.get_nowait()
             except queue.Empty:
                 break
             try:
                 while len(_live) >= MAX_CARDS:
-                    # 가장 오래된 것부터 즉시 없앤다. fade 를 기다리면 그 사이
-                    # 새 카드가 위로 쌓여 화면을 넘어간다.
-                    _live[0]._destroy()
-                card = Card(_root, item)
-                _live.append(card)
-                _layout()
-                card.fade(247, 30)
+                    _live[0].destroy()
+                _live.append(Card(item))
+                moved = True
             except Exception:
                 paths.log("toast: " + traceback.format_exc())
+
+        now = time.time()
+        for card in list(_live):                        # 수명
+            if card.closing:
+                continue
+            age = now - card.born
+            if age > HARD_LIFE:
+                card.destroy()
+                moved = True
+            elif age > LIFE_MS / 1000 and not (card.over and age < HOLD_MAX):
+                card.close()
+
+        if moved:
+            _layout()
+
+        anim = False                                    # 페이드
+        for card in list(_live):
+            if not card.step:
+                continue
+            anim = True
+            card.alpha = max(0, min(247, card.alpha + card.step))
+            if card.step > 0 and card.alpha >= 247:
+                card.step = 0
+            elif card.step < 0 and card.alpha <= 0:
+                card.destroy()
+                _layout()
+                continue
+            card.paint()
+        _set_rate(ANIM_MS if anim else IDLE_MS)
     except Exception:
         paths.log("toast: " + traceback.format_exc())
-    try:
-        _sweep()
-    except Exception:
-        paths.log("toast: " + traceback.format_exc())
-    finally:
-        # 무슨 일이 있어도 다음 회차를 예약한다
-        _root.after(300, _pump)
-
-
-def _sweep():
-    """수명을 넘긴 카드를 강제로 없앤다.
-
-    fade 는 Tk 의 after 로 이어지는데, 중간에 한 번 예외가 나면 그 사슬이
-    끊겨 카드가 화면에 그대로 남는다. 그러면 다음 알림이 그 위에 겹쳐 떠서
-    "지난 알림이 계속 보이는" 것처럼 된다. 마지막 안전망.
-    """
-    now = time.time()
-    for card in list(_live):
-        if now - getattr(card, "born", now) > HARD_LIFE:
-            card._destroy()
 
 
 def _safe(fn, tag):
     try:
         fn()
     except Exception:
-        paths.log(tag + ": " + traceback.format_exc())
+        paths.log("toast %s 실패: %s" % (tag, traceback.format_exc()))
 
 
 def run_forever(on_ready=None):
-    """메인 스레드에서 호출. tkinter 이벤트 루프를 돈다."""
-    global _root
-    paths.log("toast.run_forever: Tk 생성 전")
-    _root = tk.Tk()
-    _root.withdraw()
-
-    # 빌드본은 sys.stderr 가 None 이다. tkinter 기본 예외 처리기가 stderr 에
-    # 쓰려다 실패하면 이벤트 루프째로 망가진다. 파일로 남기도록 교체한다.
-    _root.report_callback_exception = lambda exc, val, tb: paths.log(
-        "tk callback: " + "".join(traceback.format_exception(exc, val, tb)))
-
-    _root.after(200, _pump)
+    """메인 스레드에서 호출. Win32 메시지 루프를 돈다."""
+    global _ctrl
+    paths.log("toast.run_forever: 창 클래스 등록")
+    _register()
+    _ctrl = U32.CreateWindowExW(0, _CLASS_NAME, "To-Do Manager", WS_POPUP,
+                                0, 0, 0, 0, None, None, None, None)
+    if not _ctrl:
+        raise OSError("타이머용 창 생성 실패 (%d)" % ctypes.get_last_error())
+    _set_rate(IDLE_MS)
     if on_ready:
-        _root.after(300, lambda: _safe(on_ready, "on_ready"))
-    paths.log("toast.run_forever: mainloop 진입")
-    _root.mainloop()
-    paths.log("toast.run_forever: mainloop 종료")
-
-
-def stop():
-    if _root:
-        _root.quit()
+        _safe(on_ready, "on_ready")
+    paths.log("toast.run_forever: 메시지 루프 진입")
+    msg = MSG()
+    while U32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+        U32.TranslateMessage(ctypes.byref(msg))
+        U32.DispatchMessageW(ctypes.byref(msg))
