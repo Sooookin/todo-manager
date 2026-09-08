@@ -76,6 +76,10 @@ def selftest():
         "",
         "[import 점검]",
     ]
+    paths.unblock()
+    n = paths.UNBLOCKED or 0
+    lines.append("  다운로드 표시  "
+                 + ("%d개 파일에서 떼어냄" % n if n else "없음"))
     lines.append("  ssl         " + ("껍데기(용량 절약)" if getattr(
         sys.modules.get("ssl"), "__file__", None) is None else "정품"))
     for mod in ("PIL", "PIL.Image", "PIL.ImageDraw", "PIL.ImageFilter",
@@ -146,6 +150,9 @@ def selftest():
 
 def run():
     stub_ssl()
+
+    import paths
+    paths.unblock()          # clr 을 부르기 전에 떼야 한다
     if "--selftest" in sys.argv:
         selftest()
     elif "--ui" in sys.argv:

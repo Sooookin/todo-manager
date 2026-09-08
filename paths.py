@@ -29,6 +29,41 @@ OLD_DATA_DIRS = [os.path.join(_base, "오늘")]   # 예전 이름
 DATA_FILE = os.path.join(DATA_DIR, "data.json")
 
 
+UNBLOCKED = None        # unblock() 이 떼어낸 파일 수 (점검에서 보여주려고 기억한다)
+
+
+def unblock():
+    """묶여 온 DLL 에서 "인터넷에서 받은 파일" 표시를 뗀다.
+
+    zip 을 받아 그냥 풀면 안쪽 파일마다 Zone.Identifier 라는 꼬리표가 붙는다.
+    .NET Framework 는 이 표시가 붙은 어셈블리를 아예 읽지 않아서,
+    Python.Runtime.dll 을 못 불러 창이 통째로 뜨지 않았다
+    ("Failed to resolve Python.Runtime.Loader.Initialize").
+    받는 사람이 zip 속성에서 "차단 해제" 를 누르기를 기대할 수는 없으니
+    우리가 시작할 때 직접 뗀다. 꼬리표는 부속 스트림이라 파일 내용은 그대로다.
+    """
+    global UNBLOCKED
+    if not FROZEN:
+        UNBLOCKED = 0
+        return 0
+    import ctypes
+
+    kernel32 = ctypes.windll.kernel32
+    n = 0
+    for root, _, files in os.walk(APP_DIR):
+        for f in files:
+            if not f.lower().endswith((".dll", ".pyd", ".exe")):
+                continue
+            tag = os.path.join(root, f) + ":Zone.Identifier"
+            if kernel32.DeleteFileW(tag):
+                n += 1
+    if n:
+        log("다운로드 표시를 %d개 파일에서 떼어냈다" % n)
+    if UNBLOCKED is None:
+        UNBLOCKED = n
+    return n
+
+
 def ensure_data_dir():
     os.makedirs(DATA_DIR, exist_ok=True)
     return DATA_DIR
