@@ -22,13 +22,21 @@ class Api:
         w.minimize()
 
     def toggle_max(self):
-        w = webview.windows[0]
-        if getattr(w, "_maxed", False):
-            w.restore()
-            w._maxed = False
-        else:
-            w.maximize()
-            w._maxed = True
+        """최대화 <-> 복원. 상태는 창에 직접 물어본다.
+
+        예전에는 파이썬 쪽에 _maxed 를 기억해 뒀는데, Win+Up 이나 제목줄
+        두 번 누르기로 최대화하면 그 값이 실제와 어긋나 버튼이 먹지 않았다.
+        """
+        h = hwnd()
+        if not h:
+            return False
+        maxed = bool(_U.IsZoomed(h))
+        _U.ShowWindow(h, SW_RESTORE if maxed else SW_MAXIMIZE)
+        return not maxed
+
+    def is_max(self):
+        h = hwnd()
+        return bool(h and _U.IsZoomed(h))
 
     def close(self):
         """창을 없애지 않고 숨긴다.
@@ -45,7 +53,7 @@ class Api:
 # 요청을 받은 HTTP 스레드에서 부르면 조용히 아무 일도 일어나지 않았다.
 # (최소화된 창에 열기를 눌러도 그대로 최소화 상태로 남던 원인)
 _U = ctypes.windll.user32
-SW_HIDE, SW_SHOW, SW_RESTORE = 0, 5, 9
+SW_HIDE, SW_MAXIMIZE, SW_SHOW, SW_RESTORE = 0, 3, 5, 9
 _hwnd_cache = None
 
 
@@ -105,7 +113,10 @@ def focus():
         paths.log("ui.focus: 창 핸들을 찾지 못했다")
         return
     _U.ShowWindow(h, SW_SHOW)
-    _U.ShowWindow(h, SW_RESTORE)
+    # SW_RESTORE 를 무조건 부르면 최대화해 둔 창이 원래 크기로 줄어든다.
+    # 최소화된 것만 되돌린다.
+    if _U.IsIconic(h):
+        _U.ShowWindow(h, SW_RESTORE)
     _U.SetForegroundWindow(h)
     _U.BringWindowToTop(h)
     _nudge(h)

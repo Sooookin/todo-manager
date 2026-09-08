@@ -300,11 +300,7 @@ def tick():
     brief = st.get("brief_time", "08:30")
     if brief and brief <= hm <= _plus(brief, 120):
         if (left or o["overdue"]) and _mark(f"brief:{now.date()}"):
-            head = (o["overdue"] + [i for i in o["todays"] if not i["done"]])[:1]
-            tail = f" 외 {left-1}건" if left > 1 else ""
-            toast.notify(f"오늘 할 일 {left}건",
-                         (head[0]["title"] if head else "") + tail, accent="#85bdb3",
-                         key=f"brief:{now.date()}")
+            _brief(now, o)
 
     missed = []
     for i in store.instances(back=1, ahead=1, data=d):
@@ -328,11 +324,37 @@ def tick():
                          on_done=lambda tid=tid, day=day: store.toggle_done(tid, day),
                          key="missed:%s:%s" % (tid, day))
         else:
-            toast.notify("놓친 알림 %d건" % len(missed),
-                         "%s · %s 외 %d건" % (head["time"], head["title"],
-                                                  len(missed) - 1),
-                         accent="#08202b", key="missed:%s" % now.date())
+            rows = [(i["time"] or "", i["title"], True) for i in missed]
+            toast.notify_list("놓친 알림", "지나간 알림 %d건" % len(missed),
+                              rows[:toast.LIST_MAX],
+                              max(0, len(rows) - toast.LIST_MAX),
+                              accent="#08202b", key="missed:%s" % now.date())
         log("놓친 알림 %d건을 한 장으로 알림" % len(missed))
+
+
+WEEK = "월화수목금토일"
+
+
+def _brief(now, o):
+    """아침 브리핑. 밀린 것을 앞에, 오늘 것을 시각 순으로 뒤에 붙인다.
+
+    예전에는 "첫 항목 외 N건" 이라 나머지 이름을 알려주지 않았다. 그러면 결국
+    창을 열어야 해서 알림이 한 단계를 더 만드는 셈이었다.
+    """
+    rows = []
+    for i in o["overdue"]:
+        when = i["date"][5:].replace("-", "/") if i["date"] else ""
+        rows.append((when, i["title"], True))
+    for i in o["todays"]:
+        if not i["done"]:
+            rows.append((i["time"] or "", i["title"], False))
+    if not rows:
+        return
+    d = now.date()
+    title = "%d월 %d일 %s요일" % (d.month, d.day, WEEK[d.weekday()])
+    toast.notify_list("아침 브리핑", title, rows[:toast.LIST_MAX],
+                      max(0, len(rows) - toast.LIST_MAX),
+                      accent="#85bdb3", key="brief:%s" % d)
 
 
 def _plan(i, now, default_lead):

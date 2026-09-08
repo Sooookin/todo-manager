@@ -24,20 +24,23 @@ ACCENT  = "#4d7572"
 DEEP    = "#08202b"
 
 PAD = 4                       # 카드 밖 여백 (블러가 없으니 조금만)
-CW, CH = 380, 162             # 카드 본체 (제목 두 줄이 들어갈 만큼)
-W, H = CW + PAD * 2, CH + PAD * 2
-R, GAP = 20, 6
-BTN = (22, CH - 44, CW - 44, 28)      # 완료 버튼 - 하단 전체 폭, 얇은 알약형
-CLOSE = (CW - 42, 12, 28, 28)         # ✕ 영역
-BTN_FACE = "#e7ecea"                  # 살짝 밝게 → 올라온 면처럼 보이게
+CW = 340                      # 카드 폭. 380 은 글자에 비해 넓어 여백만 늘었다.
+R, GAP = 18, 6
+BTN_FACE = "#e7ecea"                  # 살짝 밝게 -> 올라온 면처럼 보이게
 
-# 글자 자리. 오른쪽은 ✕ 자리를 비워 둔다.
-TX, TY = 42, 25
-TW = CW - TX - 44
+# 카드 높이는 내용에 따라 정한다. 예전에는 162px 고정이어서 제목이 한 줄인
+# 알림은 아래쪽이 통째로 비었다. 창을 쌓는 _layout() 도 카드마다 자기 높이를 쓴다.
+CLOSE = (CW - 42, 8, 28, 28)          # 닫기 v 의 누를 수 있는 영역
+XM = 13                               # v 표시 크기
+TX, TY = 40, 22                       # 글자 시작 자리 (강조 바 오른쪽)
+TW = CW - TX - 40                     # 오른쪽은 v 자리를 비워 둔다
 TITLE_PX, SUB_PX = 13, 11             # 예전 15/12 는 글자가 커서 제목이 잘렸다
-LINE_H = 18
-SUB_LINE_H = 15
-TITLE_LINES = 2
+LINE_H, SUB_LINE_H = 18, 15
+TITLE_LINES, SUB_LINES = 2, 3
+
+# 목록형 카드(아침 브리핑·놓친 알림 요약)
+LIST_ROW = 19
+LIST_MAX = 4
 
 FONTS = [r"C:\Windows\Fonts\malgun.ttf", r"C:\Windows\Fonts\NotoSansKR-VF.ttf"]
 FONTS_BD = [r"C:\Windows\Fonts\malgunbd.ttf", r"C:\Windows\Fonts\malgun.ttf"]
@@ -54,7 +57,7 @@ MAX_CARDS = 3
 _seen = {}                    # key -> 마지막으로 띄운 시각
 
 
-def notify(title, sub="", accent=ACCENT, on_done=None, key=None):
+def notify(title, sub="", accent=ACCENT, on_done=None, key=None, extra=None):
     """같은 알림이 겹쳐 쌓이지 않게 key 로 한 번 걸러낸다.
 
     key 를 주지 않으면 제목+내용을 키로 쓴다. 60초 안에 같은 키가 다시 오면 버린다.
@@ -67,10 +70,21 @@ def notify(title, sub="", accent=ACCENT, on_done=None, key=None):
     if now - _seen.get(k, 0) < 60:
         return
     _seen[k] = now
-    _queue.put({"title": title, "sub": sub, "accent": accent, "on_done": on_done, "key": k})
+    item = {"title": title, "sub": sub, "accent": accent, "on_done": on_done,
+            "key": k}
+    item.update(extra or {})
+    _queue.put(item)
+
+
+def notify_list(label, title, rows, more=0, accent=ACCENT, key=None):
+    """여러 건을 한 장에 나열한다. rows 는 (왼쪽칸, 제목, 지났는지) 목록."""
+    notify(title, "", accent=accent, key=key,
+           extra={"label": label, "rows": list(rows), "more": more})
 
 
 # ---------------- 그리기 ----------------
+
+
 def _rgb(h):
     h = h.lstrip("#")
     return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
@@ -169,84 +183,120 @@ def _ring(size, radius, color, alpha=255, width=1):
     return layer
 
 
-def _card_bg(accent, hover, label="완료"):
-    """글자를 뺀 카드 바탕. hover 는 None / 'btn' / 'x'.
-
-    그림자(블러)를 쓰지 않는다. 카드는 바닥이 무엇일지 모르는 화면 위에 뜨므로
-    경계만 얇은 선으로 잡아 주고, 나머지는 담백하게 면으로 채운다.
-    """
-    key = (accent, hover, label)
-    if key in _bgcache:
-        return _bgcache[key]
-
+def _shell(h, accent=None, bar=0):
+    """카드 바탕(면 + 경계선 + 강조 바) 과 그 위에 그릴 Draw 를 만든다."""
     from PIL import Image, ImageDraw
 
-    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    shape = _round((CW, CH), R)
+    img = Image.new("RGBA", (CW + PAD * 2, h + PAD * 2), (0, 0, 0, 0))
+    card = Image.new("RGBA", (CW, h), (0, 0, 0, 0))
+    card.paste(Image.new("RGBA", (CW, h), _rgb(CARD) + (255,)), (0, 0),
+               _round((CW, h), R))
+    card.alpha_composite(_ring((CW, h), R, EDGE, 255, 1))
+    if bar:
+        card.paste(Image.new("RGBA", (4, bar), _rgb(accent) + (255,)), (22, TY),
+                   _round((4, bar), 2))
+    return img, card, ImageDraw.Draw(card)
 
-    card = Image.new("RGBA", (CW, CH), (0, 0, 0, 0))
-    card.paste(Image.new("RGBA", (CW, CH), _rgb(CARD) + (255,)), (0, 0), shape)
-    card.alpha_composite(_ring((CW, CH), R, EDGE, 255, 1))     # 경계선
-    d = ImageDraw.Draw(card)
 
-    # 왼쪽 강조 바 (글자 블록 옆)
-    card.paste(Image.new("RGBA", (4, 52), _rgb(accent) + (255,)),
-               (24, TY + 1), _round((4, 52), 2))
-
-    f_btn = _font(FONTS_BD, 12)
-
-    # ── 완료 버튼: 하단 전체 폭, 얇은 알약형 ──
-    bx, by, bw, bh = BTN
-    br = bh // 2
-    if hover == "btn":
-        face, face_label, line = accent, DEEP, accent
-    else:
-        face, face_label, line = BTN_FACE, ACCENT, EDGE
-    btn = Image.new("RGBA", (CW, CH), (0, 0, 0, 0))
-    btn.paste(Image.new("RGBA", (bw, bh), _rgb(face) + (255,)), (bx, by),
-              _round((bw, bh), br))
-    btn.alpha_composite(_ring((bw, bh), br, line, 255, 1), (bx, by))
-    card.alpha_composite(btn)
-    d.text((bx + bw / 2, by + bh / 2 - 1), label, font=f_btn, anchor="mm",
-           fill=_rgb(face_label) + (255,))
-
-    # ── 닫기 ✕ ──
+def _close_mark(card, hover):
     cx, cy, cw, ch = CLOSE
     if hover == "x":
-        card.paste(Image.new("RGBA", (cw, ch), _rgb(PALE) + (255,)),
-                   (cx, cy), _round((cw, ch), 9))
-    xm = _x_mark(14, TEXT if hover == "x" else MUTED, 255 if hover == "x" else 200)
-    card.alpha_composite(xm, (cx + (cw - 14) // 2, cy + (ch - 14) // 2))
+        card.paste(Image.new("RGBA", (cw, ch), _rgb(PALE) + (255,)), (cx, cy),
+                   _round((cw, ch), 9))
+    m = _x_mark(XM, TEXT if hover == "x" else MUTED, 255 if hover == "x" else 200)
+    card.alpha_composite(m, (cx + (cw - XM) // 2, cy + (ch - XM) // 2))
 
+
+def _pill(card, box, label, accent, hover):
+    """하단 전체 폭의 얇은 알약형 버튼."""
+    from PIL import Image, ImageDraw
+
+    bx, by, bw, bh = box
+    r = bh // 2
+    face, fg, line = ((accent, DEEP, accent) if hover == "btn"
+                      else (BTN_FACE, ACCENT, EDGE))
+    card.paste(Image.new("RGBA", (bw, bh), _rgb(face) + (255,)), (bx, by),
+               _round((bw, bh), r))
+    card.alpha_composite(_ring((bw, bh), r, line, 255, 1), (bx, by))
+    ImageDraw.Draw(card).text((bx + bw / 2, by + bh / 2 - 1), label,
+                              font=_font(FONTS_BD, 11), anchor="mm",
+                              fill=_rgb(fg) + (255,))
+
+
+def _draw_normal(item, hover):
+    f_t, f_s = _font(FONTS_BD, TITLE_PX), _font(FONTS, SUB_PX)
+    lines = _wrap(item["title"], f_t, TW, TITLE_LINES)
+    subs = _wrap(item["sub"], f_s, TW, SUB_LINES) if item.get("sub") else []
+    block = len(lines) * LINE_H + (4 + len(subs) * SUB_LINE_H if subs else 0)
+    btn = bool(item.get("on_done"))
+    h = TY + block + (14 + 26 + 14 if btn else 16)
+
+    img, card, d = _shell(h, item["accent"], block + 2)
+    y = TY
+    for ln in lines:
+        d.text((TX, y), ln, font=f_t, fill=_rgb(TEXT) + (255,))
+        y += LINE_H
+    if subs:
+        y += 4
+        for ln in subs:
+            d.text((TX, y), ln, font=f_s, fill=_rgb(MUTED) + (255,))
+            y += SUB_LINE_H
+    hits = {}
+    if btn:
+        box = (20, h - 40, CW - 40, 26)
+        _pill(card, box, "완료", item["accent"], hover)
+        hits["btn"] = box
+    _close_mark(card, hover)
     img.alpha_composite(card, (PAD, PAD))
-    _bgcache[key] = img
-    return img
+    return img, hits
+
+
+def _draw_list(item, hover):
+    """여러 건을 한 장에 나열한다.
+
+    강조 바와 버튼을 두지 않는다. 강조 바는 "이 한 건" 을 가리키는 표시이고,
+    버튼은 완료할 대상이 없어 "확인" 이라는 뜻 없는 이름이 되기 때문이다.
+    """
+    f_lab, f_ttl = _font(FONTS, 10), _font(FONTS_BD, 14)
+    f_key, f_row = _font(FONTS_BD, 10), _font(FONTS, 11)
+    rows = item["rows"][:LIST_MAX]
+    more = item.get("more", 0)
+    h = 16 + 13 + 22 + 9 + 1 + 8 + len(rows) * LIST_ROW + (14 if more else 4) + 12
+
+    img, card, d = _shell(h)
+    L = 22
+    d.text((L, 15), item.get("label", ""), font=f_lab, fill=_rgb(MUTED) + (255,))
+    d.text((L, 30), item["title"], font=f_ttl, fill=_rgb(TEXT) + (255,))
+    n = len(item["rows"]) + more
+    d.text((CW - 34, 33), "%d건" % n, font=f_key, anchor="ra",
+           fill=_rgb(ACCENT) + (255,))
+    from PIL import Image
+    yy = 61
+    card.paste(Image.new("RGBA", (CW - L * 2, 1), _rgb(PALE) + (255,)), (L, yy))
+    y = yy + 8
+    for key, name, over in rows:
+        d.text((L, y + 1), key or "—", font=f_key,
+               fill=_rgb(DEEP if over else MUTED) + (255,))
+        wide = CW - 34 - (L + 42) - (24 if over else 0)
+        d.text((L + 42, y), _wrap(name, f_row, wide, 1)[0], font=f_row,
+               fill=_rgb(TEXT) + (255,))
+        if over:
+            d.text((CW - 34, y + 1), "지남", font=f_key, anchor="ra",
+                   fill=_rgb(DEEP) + (255,))
+        y += LIST_ROW
+    if more:
+        d.text((L + 42, y + 1), "그 외 %d건" % more, font=f_key,
+               fill=_rgb(MUTED) + (255,))
+    _close_mark(card, hover)
+    img.alpha_composite(card, (PAD, PAD))
+    return img, {}
 
 
 def _card_rgba(item, hover=None):
-    """카드 한 장. 바탕은 캐시에서 가져오고 글자는 이 알림의 것으로 새로 그린다."""
-    from PIL import ImageDraw
-
-    # 완료 처리할 대상이 없는 알림(브리핑·요약)은 버튼이 "확인" 이다.
-    # "완료" 라고 적어두면 무엇이 완료되는지 알 수 없다.
-    btn_label = "완료" if item.get("on_done") else "확인"
-    img = _card_bg(item["accent"], hover, btn_label).copy()
-    d = ImageDraw.Draw(img)
-    f_title = _font(FONTS_BD, TITLE_PX)
-    f_sub = _font(FONTS, SUB_PX)
-
-    lines = _wrap(item["title"], f_title, TW)
-    y = PAD + TY
-    for ln in lines:
-        d.text((PAD + TX, y), ln, font=f_title, fill=_rgb(TEXT) + (255,))
-        y += LINE_H
-    # 부제목도 두 줄까지 쓴다. 한 줄로 자르면 "왜 떴는지" 가 잘려 나간다.
-    if item.get("sub"):
-        y += 4
-        for ln in _wrap(item["sub"], f_sub, TW, 2):
-            d.text((PAD + TX, y), ln, font=f_sub, fill=_rgb(MUTED) + (255,))
-            y += SUB_LINE_H
-    return img
+    """카드 한 장과 누를 수 있는 자리. 글자는 매번 이 알림의 것으로 새로 그린다."""
+    if item.get("rows") is not None:
+        return _draw_list(item, hover)
+    return _draw_normal(item, hover)
 
 
 # ---------------- 레이어드 윈도우 (GDI) ----------------
@@ -326,7 +376,7 @@ def _paint_layered(hwnd, img, alpha=255):
     try:
         bi = BITMAPINFOHEADER()
         bi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
-        bi.biWidth, bi.biHeight = W, -H          # 음수 = 위에서 아래로
+        bi.biWidth, bi.biHeight = img.width, -img.height   # 음수 = 위에서 아래로
         bi.biPlanes, bi.biBitCount = 1, 32
         bi.biCompression = BI_RGB
         bits = PVOID()
@@ -337,7 +387,7 @@ def _paint_layered(hwnd, img, alpha=255):
         ctypes.memmove(bits, data, len(data))
         old = G32.SelectObject(mem_dc, hbmp)
 
-        size = wintypes.SIZE(W, H)
+        size = wintypes.SIZE(img.width, img.height)
         src = wintypes.POINT(0, 0)
         blend = BLENDFUNCTION(AC_SRC_OVER, 0, int(alpha), AC_SRC_ALPHA)
         if not U32.UpdateLayeredWindow(hwnd, screen_dc, None, ctypes.byref(size),
@@ -445,11 +495,12 @@ class Card:
         self.born = time.time()
         self.closing = False
         self.pos = (0, 0)
-        self.img = _card_rgba(item)
+        self.img, self.hits = _card_rgba(item)
+        self.w, self.h = self.img.size
         self.hwnd = U32.CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
             _CLASS_NAME, "To-Do Manager 알림", WS_POPUP,
-            0, 0, W, H, None, None, None, None)
+            0, 0, self.w, self.h, None, None, None, None)
         if not self.hwnd:
             raise OSError("CreateWindowEx 실패 (%d)" % ctypes.get_last_error())
         _cards[self.hwnd] = self
@@ -459,7 +510,7 @@ class Card:
     def place(self, x, y):
         self.pos = (x, y)
         U32.SetWindowPos(self.hwnd, PVOID(HWND_TOPMOST & 0xFFFFFFFFFFFFFFFF),
-                         x, y, W, H, SWP_NOACTIVATE)
+                         x, y, self.w, self.h, SWP_NOACTIVATE)
         self.paint()
 
     def paint(self):
@@ -471,13 +522,19 @@ class Card:
     # --- 마우스 ---
     def _hit(self, x, y):
         cx, cy = x - PAD, y - PAD
-        bx, by, bw, bh = BTN
-        if bx <= cx <= bx + bw and by <= cy <= by + bh:
-            return "btn"
+        box = self.hits.get("btn")
+        if box:
+            bx, by, bw, bh = box
+            if bx <= cx <= bx + bw and by <= cy <= by + bh:
+                return "btn"
         ox, oy, ow, oh = CLOSE
         if ox <= cx <= ox + ow and oy <= cy <= oy + oh:
             return "x"
         return None
+
+    def _body(self, x, y):
+        """버튼이 없는 카드(브리핑·안내)는 아무 데나 눌러도 닫힌다."""
+        return not self.hits.get("btn")
 
     def on_move(self, x, y):
         if not self.over:
@@ -490,7 +547,7 @@ class Card:
             return
         self.hover = t
         try:
-            self.img = _card_rgba(self.item, t)
+            self.img, self.hits = _card_rgba(self.item, t)
         except Exception:
             return
         self.paint()
@@ -500,7 +557,7 @@ class Card:
         if self.hover is not None:
             self.hover = None
             try:
-                self.img = _card_rgba(self.item, None)
+                self.img, self.hits = _card_rgba(self.item, None)
                 self.paint()
             except Exception:
                 pass
@@ -515,7 +572,7 @@ class Card:
                 except Exception:
                     paths.log("toast on_done 실패: " + traceback.format_exc())
             self.close()
-        elif t == "x":
+        elif t == "x" or self._body(x, y):
             self.close()
 
     # --- 수명 ---
@@ -589,9 +646,12 @@ def _work_area():
 
 
 def _layout():
+    """오른쪽 아래에서 위로 쌓는다. 높이가 카드마다 달라 실제 높이를 더해 간다."""
     _, _, sw, sh = _work_area()
-    for n, card in enumerate(reversed(_live)):
-        card.place(sw - W - 20 + PAD, sh - 12 - (n + 1) * (CH + GAP) - PAD)
+    y = sh - 12 + PAD
+    for card in reversed(_live):
+        y -= card.h - PAD * 2 + GAP
+        card.place(sw - card.w - 20 + PAD, y - PAD)
 
 
 def _set_rate(ms):

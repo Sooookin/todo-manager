@@ -94,46 +94,72 @@ READ_ME = r"""To-Do Manager  -  일정 · 루틴 관리
 """
 
 
+def _imports(path):
+    """PE 임포트 테이블에 적힌 DLL 이름들."""
+    import pefile
+    pe = pefile.PE(path, fast_load=True)
+    try:
+        pe.parse_data_directories(
+            directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_IMPORT"]])
+        return [e.dll.decode().lower()
+                for e in getattr(pe, "DIRECTORY_ENTRY_IMPORT", [])]
+    finally:
+        pe.close()
+
+
 def extra_binaries():
     """인터프리터가 표준 위치에 두지 않는 DLL 을 자동으로 찾아 담는다.
 
     Anaconda 는 확장 모듈이 요구하는 DLL 을 Library\bin 에 둔다.
     PyInstaller 는 그 경로를 스캔하지 않으므로, 넣어주지 않으면 빌드본이
-    실행 즉시 "DLL load failed while importing _ctypes / _tkinter" 로 죽는다.
+    실행 즉시 "DLL load failed while importing _ctypes / PIL._imaging" 으로 죽는다.
     이름을 박아두면 파이썬 버전이 바뀔 때 또 깨지므로, .pyd 의 임포트 테이블을
-    직접 읽어서 필요한 것만 담는다.
+    직접 읽어서 필요한 것만 담는다. DLL 이 또 다른 DLL 을 부르므로
+    (tiff -> zstd, freetype -> libpng ...) 더 나올 것이 없을 때까지 따라간다.
     """
+    import glob
+
     libbin = os.path.join(sys.base_prefix, "Library", "bin")
     dll_dir = os.path.join(sys.base_prefix, "DLLs")
+    pil_dir = os.path.join(sys.base_prefix, "Lib", "site-packages", "PIL")
     if not os.path.isdir(libbin):
         return []                       # python.org 배포판 등은 이미 정상
     try:
-        import pefile
+        import pefile                   # noqa: F401
     except ImportError:
         return []
 
-    need, out = [], []
     # _tkinter · _ssl 은 일부러 뺐다. tkinter 는 더 이상 쓰지 않고(toast 는 Win32),
     # ssl 은 main.stub_ssl() 이 껍데기를 끼운다. 둘을 넣으면 tcl/tk 6MB +
     # libcrypto/libssl 5.8MB 가 따라 들어온다.
-    for mod in ("_ctypes", "_socket", "select", "_queue"):
-        p = os.path.join(dll_dir, mod + ".pyd")
-        if not os.path.exists(p):
-            continue
-        pe = pefile.PE(p, fast_load=True)
-        pe.parse_data_directories(
-            directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_IMPORT"]])
-        for entry in getattr(pe, "DIRECTORY_ENTRY_IMPORT", []):
-            name = entry.dll.decode()
-            if name.lower() not in need:
-                need.append(name.lower())
-        pe.close()
+    seeds = [os.path.join(dll_dir, m + ".pyd")
+             for m in ("_ctypes", "_socket", "select", "_queue")]
+    # PIL 의 확장도 씨앗에 넣는다. 예전에는 이 DLL(zlib·libjpeg·freetype ...)이
+    # 다른 패키지 덕에 우연히 따라 들어왔고, 그 패키지를 빼자 PIL.Image 가
+    # "DLL load failed while importing _imaging" 으로 죽었다.
+    seeds += glob.glob(os.path.join(pil_dir, "_imaging.cp*.pyd"))
+    seeds += glob.glob(os.path.join(pil_dir, "_imagingft.cp*.pyd"))
 
     # OS·VC 런타임이 제공하는 것은 담지 않는다 (시스템 것과 충돌할 수 있다)
-    skip = ("api-ms-win", "vcruntime", "msvcp", "ucrtbase", "python3")
+    skip = ("api-ms-win", "vcruntime", "msvcp", "ucrtbase", "python3", "kernel32",
+            "user32", "gdi32", "advapi32", "shell32", "ole32", "oleaut32",
+            "ws2_32", "crypt32", "bcrypt", "shlwapi", "comdlg32", "rpcrt4",
+            "setupapi", "cfgmgr32", "dbghelp", "mfplat", "winmm", "imm32",
+            "version", "psapi", "userenv", "secur32", "iphlpapi", "netapi32")
+
+    need, out = [], []
+    queue = [p for p in seeds if os.path.exists(p)]
+    while queue:
+        cur = queue.pop()
+        for name in _imports(cur):
+            if name.startswith(skip) or name in need:
+                continue
+            need.append(name)
+            cand = os.path.join(libbin, name)
+            if os.path.exists(cand):
+                queue.append(cand)
+
     for name in need:
-        if name.startswith(skip):
-            continue
         cand = os.path.join(libbin, name)
         if os.path.exists(cand):
             out += ["--add-binary", f"{cand}{os.pathsep}."]
@@ -236,7 +262,11 @@ def main():
               # decimal·bz2·lzma 도 빼면 안 된다. decimal 을 뺐더니
               # PIL.PngImagePlugin 이 못 올라와서 PNG·ICO 를 읽지 못했고,
               # 그 결과 트레이 아이콘이 조용히 사라졌다 (--selftest 가 잡아 줬다)
-              "ensurepip", "venv", "zoneinfo"):
+              "ensurepip", "venv", "zoneinfo",
+              # TLS 를 아예 쓰지 않는데도(ssl 은 껍데기) PyInstaller 훅이
+              # cryptography 를 끌어와 _rust.pyd 4MB 가 들어와 있었다.
+              # jinja2·markupsafe 도 쓰는 곳이 없다 (bottle 은 자체 템플릿).
+              "cryptography", "jinja2", "markupsafe"):
         args += ["--exclude-module", m]
     args += extra_binaries()
     args.append("main.py")

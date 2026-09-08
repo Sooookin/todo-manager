@@ -27,14 +27,35 @@ let STATE = null, HOL = new Set();
 const say = m => { $('#status').textContent = m; clearTimeout(say._t); say._t = setTimeout(()=>$('#status').textContent='', 2800); };
 
 /* ══════════ 창 버튼 ══════════ */
+const MAX_GLYPH = '';      /* ChromeMaximize - 빈 사각형 */
+const RESTORE_GLYPH = '';  /* ChromeRestore  - 겹친 사각형 = "창 화면" */
+
+/* 최대화 여부는 창에 직접 물어본다(Win32 IsZoomed). 창 크기를 재서 짐작해
+   봤더니 테두리 없는 창은 최대화 범위가 작업 영역과 딱 맞지 않아 어긋났다.
+   Win+Up 이나 제목줄 두 번 누르기로 최대화해도 resize 는 오므로 여기서 잡힌다. */
+function paintMax(m){
+  const b = $('#w-max');
+  b.textContent = m ? RESTORE_GLYPH : MAX_GLYPH;
+  b.title = m ? '창 화면으로' : '최대화';
+}
+function syncMax(){
+  const a = window.pywebview && window.pywebview.api;
+  if(a && a.is_max) a.is_max().then(paintMax).catch(() => {});
+  else paintMax(false);                 /* 브라우저에서 열어 볼 때 */
+}
 function wireWindow(){
   const has = () => window.pywebview && window.pywebview.api;
   $('#w-min').onclick = () => has() && window.pywebview.api.minimize();
-  $('#w-max').onclick = () => has() && window.pywebview.api.toggle_max();
+  $('#w-max').onclick = () => {
+    if(has()) window.pywebview.api.toggle_max();
+    setTimeout(syncMax, 80);            /* 창이 실제로 움직인 뒤에 본다 */
+  };
   $('#w-close').onclick = () => has() ? window.pywebview.api.close() : window.close();
+  syncMax();
 }
 wireWindow();
 window.addEventListener('pywebviewready', wireWindow);
+window.addEventListener('resize', syncMax);
 
 /* ══════════ 날짜 · 영업일 ══════════ */
 const iso = d => new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().slice(0,10);
